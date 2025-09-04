@@ -71,3 +71,8 @@ module.exports = (sequelize, DataTypes) => {
   
   return Shipping;
 };
+
+    // التحقق من ملكية المتجر
+    // if (order.Store.user_id !== req.user.user_id) {
+    //   return res.status(403).json({ error: 'غير مصرح لك بإضافة معلومات شحن لهذا الطلب' });
+    // }

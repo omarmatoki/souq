@@ -223,15 +223,36 @@ exports.updateCartItem = async (req, res) => {
 // حذف عنصر من السلة
 exports.deleteCartItem = async (req, res) => {
   try {
-    const cartItem = await db.CartItem.findByPk(req.params.id);
-    if (!cartItem) {
-      return res.status(404).json({ error: 'عنصر السلة غير موجود' });
+    const { ids } = req.body;
+
+    // التحقق من وجود مصفوفة المعرفات
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ 
+        error: 'يجب إرسال مصفوفة معرفات في body' 
+      });
     }
 
-    await cartItem.destroy();
-    res.status(200).json({ message: 'تم حذف العنصر من السلة بنجاح' });
+    // حذف العناصر مباشرة
+    const deletedCount = await db.CartItem.destroy({
+      where: {
+        cart_item_id: ids
+      }
+    });
+
+    // إرجاع النتيجة
+    if (deletedCount > 0) {
+      return res.status(200).json({
+        message: `تم حذف ${deletedCount} عنصر من السلة بنجاح`,
+        deletedCount: deletedCount
+      });
+    } else {
+      return res.status(404).json({
+        error: 'لم يتم العثور على أي عناصر للحذف'
+      });
+    }
+
   } catch (error) {
-    console.error(error);
+    console.error('خطأ في حذف عناصر السلة:', error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };

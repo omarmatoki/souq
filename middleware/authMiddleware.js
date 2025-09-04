@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const SECRET_KEY = 'supersecret';
+const SECRET_KEY = process.env.SECRET_KEY;
 
 // Middleware للتحقق من التوكن
 const authMiddleware = (req, res, next) => {

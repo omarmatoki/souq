@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 
-const SECRET_KEY = 'supersecret';
+const SECRET_KEY = process.env.SECRET_KEY;
 
 // إعداد تخزين الملفات باستخدام Multer
 const storage = multer.diskStorage({
@@ -102,8 +102,16 @@ exports.login = async (req, res) => {
       return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
     }
 
-    // البحث عن المستخدم
-    const user = await db.User.findOne({ where: { username } });
+    // البحث عن المستخدم مع متجره (إن وجد)
+    const user = await db.User.findOne({ 
+      where: { username },
+      include: [{
+        model: db.Store,
+        required: false, // LEFT JOIN - لا يتطلب وجود متجر
+        attributes: ['store_id', 'store_name'] // نجلب فقط معرف المتجر واسمه
+      }]
+    });
+
     if (!user) {
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
@@ -114,21 +122,38 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
 
-    // إنشاء JWT token
-    const token = jwt.sign(
-      { user_id: user.user_id, username: user.username, role: user.role },
-      SECRET_KEY,
-      { expiresIn: '24h' }
-    );
+    // إعداد payload للتوكن
+    const tokenPayload = {
+      user_id: user.user_id,
+      username: user.username,
+      role: user.role
+    };
 
-    // إرجاع البيانات بدون كلمة المرور
+    // إضافة store_id إلى التوكن إذا كان لدى المستخدم متجر
+    if (user.Stores && user.Stores.length > 0) {
+      tokenPayload.store_id = user.Stores[0].store_id;
+    } else {
+      tokenPayload.store_id = null;
+    }
+
+    // إنشاء JWT token
+    const token = jwt.sign(tokenPayload, SECRET_KEY, { expiresIn: '24h' });
+
+    // إعداد بيانات المستخدم للإرجاع (بدون كلمة المرور)
     const { password_hash: _, ...userWithoutPassword } = user.toJSON();
 
     res.status(200).json({
       message: 'تم تسجيل الدخول بنجاح',
-      user: userWithoutPassword,
+      user: {
+        ...userWithoutPassword,
+        store: user.Stores && user.Stores.length > 0 ? {
+          store_id: user.Stores[0].store_id,
+          store_name: user.Stores[0].store_name
+        } : null
+      },
       token
     });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });

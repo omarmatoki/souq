@@ -4,8 +4,10 @@ const storeController = require('../controllers/StoreController');
 const authMiddleware = require('../middleware/authMiddleware');
 
 // المسارات العامة (لا تحتاج مصادقة)
+router.get('/search', storeController.searchStores);
 router.get('/', storeController.getAllStores);
 router.get('/:id', storeController.getStoreById);
+
 
 // المسارات التي تحتاج مصادقة
 router.post('/', authMiddleware, storeController.createStore);

@@ -55,6 +55,7 @@ exports.getOrCreateCart = async (req, res) => {
 };
 
 // إضافة منتج للسلة
+// إضافة منتج للسلة مع إنشاء السلة تلقائياً
 exports.addToCart = async (req, res) => {
   try {
     const { session_id, product_id, quantity = 1 } = req.body;
@@ -74,10 +75,33 @@ exports.addToCart = async (req, res) => {
       return res.status(400).json({ error: 'المخزون غير كافي' });
     }
 
-    // الحصول على السلة أو إنشاؤها
-    let cart = await db.Cart.findOne({ where: { session_id } });
+    // الحصول على السلة أو إنشاؤها تلقائياً
+    let cart = await db.Cart.findOne({ 
+      where: { session_id },
+      include: [
+        {
+          model: db.CartItem,
+          as: 'CartItems',
+          include: [
+            {
+              model: db.Product,
+              as: 'Product',
+              include: [
+                {
+                  model: db.Store,
+                  as: 'Store',
+                  attributes: ['store_name', 'logo_image']
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
     if (!cart) {
       cart = await db.Cart.create({ session_id });
+      cart.CartItems = [];
     }
 
     // التحقق من وجود المنتج في السلة
@@ -104,28 +128,44 @@ exports.addToCart = async (req, res) => {
       });
     }
 
-    // إرجاع عنصر السلة مع تفاصيل المنتج
-    const updatedCartItem = await db.CartItem.findByPk(cartItem.cart_item_id, {
+    // الحصول على السلة المحدثة مع جميع العناصر
+    const updatedCart = await db.Cart.findOne({
+      where: { session_id },
       include: [
         {
-          model: db.Product,
-          as: 'product',
+          model: db.CartItem,
+          as: 'CartItems',
           include: [
             {
-              model: db.Store,
-              as: 'store',
-              attributes: ['store_name', 'logo_image']
+              model: db.Product,
+              as: 'Product',
+              include: [
+                {
+                  model: db.Store,
+                  as: 'Store',
+                  attributes: ['store_name', 'logo_image']
+                }
+              ]
             }
           ]
         }
       ]
     });
 
-    if (updatedCartItem.product && updatedCartItem.product.images) {
-      updatedCartItem.product.images = JSON.parse(updatedCartItem.product.images || '[]');
+    // تنسيق البيانات
+    if (updatedCart.CartItems) {
+      updatedCart.CartItems = updatedCart.CartItems.map(item => {
+        if (item.Product && item.Product.images) {
+          item.Product.images = JSON.parse(item.Product.images || '[]');
+        }
+        return item;
+      });
     }
 
-    res.status(201).json(updatedCartItem);
+    res.status(201).json({
+      message: 'تم إضافة المنتج للسلة بنجاح',
+      cart: updatedCart
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
@@ -142,31 +182,30 @@ exports.updateCartItem = async (req, res) => {
       return res.status(400).json({ error: 'الكمية يجب أن تكون أكبر من صفر' });
     }
 
+    // هنا: غيرنا alias ليتوافق مع العلاقة الافتراضية (Product)
     const cartItem = await db.CartItem.findByPk(id, {
-      include: [{ model: db.Product, as: 'product' }]
+      include: [{ model: db.Product }] // يمكن حذف as لأنه غير معرف في العلاقة
     });
 
     if (!cartItem) {
       return res.status(404).json({ error: 'عنصر السلة غير موجود' });
     }
 
-    // التحقق من توفر المخزون
-    if (cartItem.product.stock_quantity < quantity) {
+    // تحقق من توفر المخزون
+    if (cartItem.Product.stock_quantity < quantity) {
       return res.status(400).json({ error: 'المخزون غير كافي' });
     }
 
     await cartItem.update({ quantity });
 
-    // إرجاع العنصر المحدث مع تفاصيل المنتج
+    // إرجاع العنصر المحدث مع تفاصيل المنتج والمتجر
     const updatedCartItem = await db.CartItem.findByPk(id, {
       include: [
         {
           model: db.Product,
-          as: 'product',
           include: [
             {
-              model: db.Store,
-              as: 'store',
+              model: db.Store, // استخدم نفس alias الافتراضي (Store)
               attributes: ['store_name', 'logo_image']
             }
           ]
@@ -174,8 +213,9 @@ exports.updateCartItem = async (req, res) => {
       ]
     });
 
-    if (updatedCartItem.product && updatedCartItem.product.images) {
-      updatedCartItem.product.images = JSON.parse(updatedCartItem.product.images || '[]');
+    // تحديث الصور
+    if (updatedCartItem.Product && updatedCartItem.Product.images) {
+      updatedCartItem.Product.images = JSON.parse(updatedCartItem.Product.images || '[]');
     }
 
     res.status(200).json(updatedCartItem);
@@ -242,8 +282,11 @@ exports.getCartTotal = async (req, res) => {
       include: [
         {
           model: db.CartItem,
-          as: 'items',
-          include: [{ model: db.Product, as: 'product' }]
+          as: 'CartItems', // ✅ تصحيح الـ alias
+          include: [{ 
+            model: db.Product, 
+            as: 'Product' // ✅ تصحيح الـ alias
+          }]
         }
       ]
     });
@@ -255,8 +298,9 @@ exports.getCartTotal = async (req, res) => {
     let total = 0;
     let itemsCount = 0;
 
-    cart.items.forEach(item => {
-      total += item.product.price * item.quantity;
+    // تصحيح استخدام الـ alias في الكود
+    cart.CartItems.forEach(item => {
+      total += item.Product.price * item.quantity;
       itemsCount += item.quantity;
     });
 
