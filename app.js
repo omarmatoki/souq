@@ -135,7 +135,7 @@ const startServer = async () => {
     
     // مزامنة النماذج
     console.log('🔄 Synchronizing models...');
-    await db.sequelize.sync({ alter: true });
+    await db.sequelize.sync({ alter: false });
     console.log('✅ Models synchronized');
     
     // عرض الجداول

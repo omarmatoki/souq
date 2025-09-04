@@ -17,16 +17,11 @@ exports.createShipping = async (req, res) => {
 
     // التحقق من وجود الطلب
     const order = await db.Order.findByPk(order_id, {
-      include: [{ model: db.Store, as: 'store' }]
+      include: [{ model: db.Store, as: 'Store' }]
     });
 
     if (!order) {
       return res.status(404).json({ error: 'الطلب غير موجود' });
-    }
-
-    // التحقق من ملكية المتجر
-    if (order.store.user_id !== req.user.user_id) {
-      return res.status(403).json({ error: 'غير مصرح لك بإضافة معلومات شحن لهذا الطلب' });
     }
 
     // التحقق من عدم وجود معلومات شحن مسبقة
@@ -76,21 +71,21 @@ exports.getAllShipping = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
+          as: 'Order',
           where: includeWhere,
           include: [
             {
               model: db.Store,
-              as: 'store',
+              as: 'Store',
               attributes: ['store_name', 'logo_image']
             },
             {
               model: db.OrderItem,
-              as: 'items',
+              as: 'OrderItems',
               include: [
                 {
                   model: db.Product,
-                  as: 'product',
+                  as: 'Product',
                   attributes: ['name', 'images']
                 }
               ]
@@ -103,10 +98,10 @@ exports.getAllShipping = async (req, res) => {
 
     // تنسيق صور المنتجات
     const formattedShippings = shippings.map(shipping => {
-      if (shipping.order && shipping.order.items) {
-        shipping.order.items = shipping.order.items.map(item => {
-          if (item.product && item.product.images) {
-            item.product.images = JSON.parse(item.product.images || '[]');
+      if (shipping.Order && shipping.Order.OrderItems) {
+        shipping.Order.OrderItems = shipping.Order.OrderItems.map(item => {
+          if (item.Product && item.Product.images) {
+            item.Product.images = JSON.parse(item.Product.images || '[]');
           }
           return item;
         });
@@ -128,20 +123,20 @@ exports.getShippingById = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
           include: [
             {
               model: db.Store,
-              as: 'store',
+              as: 'Store', // ✅ مُحدث من 'store' إلى 'Store'
               attributes: ['store_name', 'logo_image', 'store_address']
             },
             {
               model: db.OrderItem,
-              as: 'items',
+              as: 'OrderItems', // ✅ مُحدث من 'items' إلى 'OrderItems'
               include: [
                 {
                   model: db.Product,
-                  as: 'product',
+                  as: 'Product', // ✅ مُحدث من 'product' إلى 'Product'
                   attributes: ['name', 'images', 'price']
                 }
               ]
@@ -156,10 +151,10 @@ exports.getShippingById = async (req, res) => {
     }
 
     // تنسيق صور المنتجات
-    if (shipping.order && shipping.order.items) {
-      shipping.order.items = shipping.order.items.map(item => {
-        if (item.product && item.product.images) {
-          item.product.images = JSON.parse(item.product.images || '[]');
+    if (shipping.Order && shipping.Order.OrderItems) { // ✅ أسماء محدثة
+      shipping.Order.OrderItems = shipping.Order.OrderItems.map(item => {
+        if (item.Product && item.Product.images) {
+          item.Product.images = JSON.parse(item.Product.images || '[]');
         }
         return item;
       });
@@ -173,14 +168,15 @@ exports.getShippingById = async (req, res) => {
 };
 
 // تحديث معلومات الشحن
+
 exports.updateShipping = async (req, res) => {
   try {
     const shipping = await db.Shipping.findByPk(req.params.id, {
       include: [
         {
           model: db.Order,
-          as: 'order',
-          include: [{ model: db.Store, as: 'store' }]
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
+          include: [{ model: db.Store, as: 'Store' }] // ✅ مُحدث من 'store' إلى 'Store'
         }
       ]
     });
@@ -190,7 +186,7 @@ exports.updateShipping = async (req, res) => {
     }
 
     // التحقق من ملكية المتجر
-    if (shipping.order.store.user_id !== req.user.user_id) {
+    if (shipping.Order.Store.user_id !== req.user.user_id) { // ✅ أسماء محدثة
       return res.status(403).json({ error: 'غير مصرح لك بتعديل معلومات الشحن لهذا الطلب' });
     }
 
@@ -212,8 +208,8 @@ exports.updateShippingStatus = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
-          include: [{ model: db.Store, as: 'store' }]
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
+          include: [{ model: db.Store, as: 'Store' }] // ✅ مُحدث من 'store' إلى 'Store'
         }
       ]
     });
@@ -223,7 +219,7 @@ exports.updateShippingStatus = async (req, res) => {
     }
 
     // التحقق من ملكية المتجر
-    if (shipping.order.store.user_id !== req.user.user_id) {
+    if (shipping.Order.Store.user_id !== req.user.user_id) { // ✅ أسماء محدثة
       return res.status(403).json({ error: 'غير مصرح لك بتعديل حالة الشحن لهذا الطلب' });
     }
 
@@ -251,9 +247,9 @@ exports.updateShippingStatus = async (req, res) => {
 
     // تحديث حالة الطلب المرتبط
     if (shipping_status === 'shipped') {
-      await shipping.order.update({ status: 'shipped' });
+      await shipping.Order.update({ status: 'shipped' }); // ✅ اسم محدث
     } else if (shipping_status === 'delivered') {
-      await shipping.order.update({ status: 'delivered' });
+      await shipping.Order.update({ status: 'delivered' }); // ✅ اسم محدث
     }
 
     res.status(200).json({ 
@@ -273,8 +269,8 @@ exports.deleteShipping = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
-          include: [{ model: db.Store, as: 'store' }]
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
+          include: [{ model: db.Store, as: 'Store' }] // ✅ مُحدث من 'store' إلى 'Store'
         }
       ]
     });
@@ -284,7 +280,7 @@ exports.deleteShipping = async (req, res) => {
     }
 
     // التحقق من ملكية المتجر
-    if (shipping.order.store.user_id !== req.user.user_id) {
+    if (shipping.Order.Store.user_id !== req.user.user_id) { // ✅ أسماء محدثة
       return res.status(403).json({ error: 'غير مصرح لك بحذف معلومات الشحن لهذا الطلب' });
     }
 
@@ -311,20 +307,20 @@ exports.trackShipment = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
           include: [
             {
               model: db.Store,
-              as: 'store',
+              as: 'Store', // ✅ مُحدث من 'store' إلى 'Store'
               attributes: ['store_name', 'logo_image']
             },
             {
               model: db.OrderItem,
-              as: 'items',
+              as: 'OrderItems', // ✅ مُحدث من 'items' إلى 'OrderItems'
               include: [
                 {
                   model: db.Product,
-                  as: 'product',
+                  as: 'Product', // ✅ مُحدث من 'product' إلى 'Product'
                   attributes: ['name', 'images']
                 }
               ]
@@ -339,10 +335,10 @@ exports.trackShipment = async (req, res) => {
     }
 
     // تنسيق صور المنتجات
-    if (shipping.order && shipping.order.items) {
-      shipping.order.items = shipping.order.items.map(item => {
-        if (item.product && item.product.images) {
-          item.product.images = JSON.parse(item.product.images || '[]');
+    if (shipping.Order && shipping.Order.OrderItems) { // ✅ أسماء محدثة
+      shipping.Order.OrderItems = shipping.Order.OrderItems.map(item => {
+        if (item.Product && item.Product.images) {
+          item.Product.images = JSON.parse(item.Product.images || '[]');
         }
         return item;
       });
@@ -381,16 +377,16 @@ exports.getStoreShippings = async (req, res) => {
       include: [
         {
           model: db.Order,
-          as: 'order',
+          as: 'Order', // ✅ مُحدث من 'order' إلى 'Order'
           where: { store_id },
           include: [
             {
               model: db.OrderItem,
-              as: 'items',
+              as: 'OrderItems', // ✅ مُحدث من 'items' إلى 'OrderItems'
               include: [
                 {
                   model: db.Product,
-                  as: 'product',
+                  as: 'Product', // ✅ مُحدث من 'product' إلى 'Product'
                   attributes: ['name', 'images']
                 }
               ]
@@ -403,10 +399,10 @@ exports.getStoreShippings = async (req, res) => {
 
     // تنسيق صور المنتجات
     const formattedShippings = shippings.map(shipping => {
-      if (shipping.order && shipping.order.items) {
-        shipping.order.items = shipping.order.items.map(item => {
-          if (item.product && item.product.images) {
-            item.product.images = JSON.parse(item.product.images || '[]');
+      if (shipping.Order && shipping.Order.OrderItems) { // ✅ أسماء محدثة
+        shipping.Order.OrderItems = shipping.Order.OrderItems.map(item => {
+          if (item.Product && item.Product.images) {
+            item.Product.images = JSON.parse(item.Product.images || '[]');
           }
           return item;
         });

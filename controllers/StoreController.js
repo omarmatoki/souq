@@ -114,13 +114,17 @@ exports.getStoreById = async (req, res) => {
       include: [
         {
           model: db.User,
-          as: 'User',
           attributes: ['username', 'whatsapp_number']
         },
         {
           model: db.Product,
-          as: 'Products',
-          limit: 10 // عرض أول 10 منتجات
+          limit: 10, // عرض أول 10 منتجات
+          include: [
+            {
+              model: db.Review,
+              attributes: ['rating']
+            }
+          ]
         }
       ]
     });
@@ -129,10 +133,85 @@ exports.getStoreById = async (req, res) => {
       return res.status(404).json({ error: 'المتجر غير موجود' });
     }
 
-    store.images = JSON.parse(store.images || '[]');
-    res.status(200).json(store);
+    // إحصائيات المنتجات
+    const allProducts = await db.Product.findAll({
+      where: { store_id: req.params.id },
+      include: [
+        {
+          model: db.Review,
+          attributes: ['rating']
+        }
+      ]
+    });
+
+    // حساب الإحصائيات
+    const totalProducts = allProducts.length;
+    const availableProducts = allProducts.filter(product => product.stock_quantity > 0).length;
+    const outOfStockProducts = allProducts.filter(product => product.stock_quantity === 0).length;
+    const lowStockProducts = allProducts.filter(product => product.stock_quantity > 0 && product.stock_quantity < 5).length;
+
+    // حساب متوسط التقييم للمتجر
+    let totalRatingSum = 0;
+    let totalReviewsCount = 0;
+    
+    allProducts.forEach(product => {
+      if (product.Reviews && product.Reviews.length > 0) {
+        const productRatingSum = product.Reviews.reduce((sum, review) => sum + review.rating, 0);
+        totalRatingSum += productRatingSum;
+        totalReviewsCount += product.Reviews.length;
+      }
+    });
+
+    const averageRating = totalReviewsCount > 0 ? (totalRatingSum / totalReviewsCount).toFixed(2) : 0;
+
+    // تحضير البيانات النهائية
+    const storeData = store.toJSON();
+    storeData.images = JSON.parse(storeData.images || '[]');
+    
+    // إضافة الإحصائيات
+    storeData.statistics = {
+      totalProducts,
+      availableProducts,
+      outOfStockProducts,
+      lowStockProducts,
+      averageRating: parseFloat(averageRating),
+      totalReviews: totalReviewsCount
+    };
+
+    // تحسين بيانات المنتجات المعروضة مع التقييمات
+    if (storeData.Products) {
+      storeData.Products = storeData.Products.map(product => {
+        const productData = { ...product };
+        
+        // حساب متوسط التقييم لكل منتج
+        if (product.Reviews && product.Reviews.length > 0) {
+          const productRatingSum = product.Reviews.reduce((sum, review) => sum + review.rating, 0);
+          productData.averageRating = (productRatingSum / product.Reviews.length).toFixed(2);
+          productData.reviewsCount = product.Reviews.length;
+        } else {
+          productData.averageRating = 0;
+          productData.reviewsCount = 0;
+        }
+        
+        // تحديد حالة المخزون
+        if (product.stock_quantity === 0) {
+          productData.stockStatus = 'نفذ المخزون';
+        } else if (product.stock_quantity < 5) {
+          productData.stockStatus = 'مخزون منخفض';
+        } else {
+          productData.stockStatus = 'متوفر';
+        }
+        
+        // إزالة بيانات التقييمات الخام لتجنب الازدواجية
+        delete productData.Reviews;
+        
+        return productData;
+      });
+    }
+
+    res.status(200).json(storeData);
   } catch (error) {
-    console.error(error);
+    console.error('Error in getStoreById:', error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };
@@ -217,6 +296,60 @@ exports.getMyStore = async (req, res) => {
     res.status(200).json(store);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+// البحث عن المتاجر بالاسم
+exports.searchStores = async (req, res) => {
+  try {
+    const { name } = req.query;
+
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: 'اسم المتجر مطلوب للبحث' });
+    }
+
+    const stores = await db.Store.findAll({
+      where: {
+        store_name: {
+          [db.Sequelize.Op.like]: `%${name.trim()}%`
+        }
+      },
+      attributes: [
+        'store_id',
+        'store_name',
+        'store_address',
+        'description',
+        'images',
+        'logo_image',
+        'created_at'
+      ],
+      order: [['store_name', 'ASC']]
+    });
+
+    // تنسيق البيانات (تحويل الصور من JSON string إلى array)
+    const formattedStores = stores.map(store => {
+      const storeData = store.toJSON();
+      if (storeData.images) {
+        storeData.images = JSON.parse(storeData.images || '[]');
+      }
+      return storeData;
+    });
+
+    if (formattedStores.length === 0) {
+      return res.status(404).json({ 
+        message: 'لم يتم العثور على متاجر بهذا الاسم',
+        stores: []
+      });
+    }
+
+    res.status(200).json({
+      message: `تم العثور على ${formattedStores.length} متجر`,
+      count: formattedStores.length,
+      stores: formattedStores
+    });
+
+  } catch (error) {
+    console.error('خطأ في البحث عن المتاجر:', error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };
