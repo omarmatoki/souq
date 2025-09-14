@@ -14,6 +14,13 @@
 /.wwebjs_cache
 # testing
 /coverage
+.wwebjs_auth/
+.wwebjs_cache/
+chrome_debug.log
+data_*
+f_*
+DevToolsActivePort
+Cookies
 
 
 
