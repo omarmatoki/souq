@@ -5,14 +5,20 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       autoIncrement: true
     },
-    order_id: {
-      type: DataTypes.INTEGER,
+    // إضافة purchase_id للتمييز بين عمليات الشراء المختلفة
+    purchase_id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
       allowNull: false,
-      references: {
-        model: 'Orders',
-        key: 'order_id'
-      }
+      comment: 'Unique identifier for each purchase session'
     },
+    // ربط الشحن بالسيشن
+    customer_session_id: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      comment: 'Session ID of the customer'
+    },
+    // إزالة order_id لأننا سنربط الطلبات بـ purchase_id
     // معلومات المشتري الكاملة
     customer_name: {
       type: DataTypes.STRING(255),
@@ -63,16 +69,29 @@ module.exports = (sequelize, DataTypes) => {
     delivered_at: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    identity_images: {
+      type: DataTypes.JSON, // يحفظ array من الصور
+      allowNull: true,
+      comment: 'JSON array containing identity document images (front, back, etc.)'
+    },
+    // إضافة timestamp لمعرفة متى تم إنشاء معلومات الشحن
+    created_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
     }
   }, {
     timestamps: false,
-    tableName: 'Shipping'
+    tableName: 'Shipping',
+    indexes: [
+      {
+        fields: ['purchase_id']
+      },
+      {
+        fields: ['customer_session_id']
+      }
+    ]
   });
   
   return Shipping;
 };
-
-    // التحقق من ملكية المتجر
-    // if (order.Store.user_id !== req.user.user_id) {
-    //   return res.status(403).json({ error: 'غير مصرح لك بإضافة معلومات شحن لهذا الطلب' });
-    // }

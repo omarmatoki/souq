@@ -5,13 +5,27 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       autoIncrement: true
     },
+    // يمكن ربط التقييم بالمنتج أو المتجر (أحدهما فقط)
     product_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true, // جعله اختياري
       references: {
         model: 'Products',
         key: 'product_id'
       }
+    },
+    store_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true, // جعله اختياري
+      references: {
+        model: 'Stores',
+        key: 'store_id'
+      }
+    },
+    // نوع التقييم لتسهيل البحث والفلترة
+    review_type: {
+      type: DataTypes.ENUM('product', 'store'),
+      allowNull: false
     },
     // معلومات المراجع (بدون تسجيل)
     reviewer_name: {
@@ -48,7 +62,24 @@ module.exports = (sequelize, DataTypes) => {
     }
   }, {
     timestamps: false,
-    tableName: 'Reviews'
+    tableName: 'Reviews',
+    // إضافة فاليديشن للتأكد من وجود product_id أو store_id فقط
+    validate: {
+      eitherProductOrStore() {
+        if ((this.product_id && this.store_id) || (!this.product_id && !this.store_id)) {
+          throw new Error('يجب تحديد إما product_id أو store_id وليس كلاهما');
+        }
+        
+        // التحقق من تطابق نوع التقييم مع المعرف المحدد
+        if (this.review_type === 'product' && !this.product_id) {
+          throw new Error('يجب تحديد product_id عند review_type = product');
+        }
+        
+        if (this.review_type === 'store' && !this.store_id) {
+          throw new Error('يجب تحديد store_id عند review_type = store');
+        }
+      }
+    }
   });
   
   return Review;

@@ -8,8 +8,8 @@ router.get('/search', storeController.searchStores);
 router.get('/', storeController.getAllStores);
 router.get('/:id', storeController.getStoreById);
 
-
 // المسارات التي تحتاج مصادقة
+router.put('/toggle-status/:id',authMiddleware, storeController.toggleStoreStatus);
 router.post('/', authMiddleware, storeController.createStore);
 router.put('/:id', authMiddleware, storeController.updateStore);
 router.delete('/:id', authMiddleware, storeController.deleteStore);

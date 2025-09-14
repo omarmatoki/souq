@@ -2,18 +2,28 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/UserController');
 const authMiddleware = require('../middleware/authMiddleware');
+const { validateWhatsAppNumber, checkWhatsAppStatus, requireVerification } = require('../middleware/whatsappMiddleware');
 
 // المسارات العامة (لا تحتاج مصادقة)
-router.post('/register', userController.register);
+router.post('/register', validateWhatsAppNumber, userController.register);
 router.post('/login', userController.login);
+
+// مسارات التحقق من WhatsApp
+router.post('/send-verification', checkWhatsAppStatus, userController.sendVerificationCode);
+router.post('/verify-whatsapp', userController.verifyWhatsAppCode);
+router.get('/verification-status/:user_id', userController.getVerificationStatus);
 
 // المسارات التي تحتاج مصادقة
 router.get('/profile', authMiddleware, userController.getProfile);
 router.get('/verify-token', authMiddleware, userController.verifyToken);
 router.put('/change-password', authMiddleware, userController.changePassword);
-router.get('/', authMiddleware, userController.getAllUsers);
-router.get('/:id', authMiddleware, userController.getUserById);
-router.put('/:id', authMiddleware, userController.updateUser);
-router.delete('/:id', authMiddleware, userController.deleteUser);
+
+// المسارات التي تحتاج مصادقة وتفعيل
+router.get('/', authMiddleware, requireVerification, userController.getAllUsers);
+router.get('/:id', authMiddleware, requireVerification, userController.getUserById);
+router.put('/:id', authMiddleware, requireVerification, validateWhatsAppNumber, userController.updateUser);
+router.delete('/:id', authMiddleware, requireVerification, userController.deleteUser);
+// إعادة إرسال رمز التحقق
+router.post('/resend-verification', userController.resendVerificationCode);
 
 module.exports = router;

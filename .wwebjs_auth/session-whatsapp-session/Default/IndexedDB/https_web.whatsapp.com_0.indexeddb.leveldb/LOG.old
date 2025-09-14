@@ -1,0 +1,55 @@
+2025/09/13-16:27:19.229 33f4 Reusing MANIFEST C:\Users\hp\Desktop\souq\backend\.wwebjs_auth\session-whatsapp-session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2025/09/13-16:27:19.231 33f4 Recovering log #7169
+2025/09/13-16:27:19.302 33f4 Reusing old log C:\Users\hp\Desktop\souq\backend\.wwebjs_auth\session-whatsapp-session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/007169.log 
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7156
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7157
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7158
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7159
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7160
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7161
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7162
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7163
+2025/09/13-16:27:19.303 33f4 Delete type=2 #7185
+2025/09/13-16:27:20.905 1770 Level-0 table #7207: started
+2025/09/13-16:27:20.916 1770 Level-0 table #7207: 393961 bytes OK
+2025/09/13-16:27:20.917 1770 Delete type=0 #7169
+2025/09/13-16:27:20.919 1770 Manual compaction at level-0 from '\x00\xaa\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\xab\x00\x00\x00' @ 0 : 0; will stop at '\x00\xaa\x00\x00\x05' @ 11155171 : 1
+2025/09/13-16:27:20.919 1770 Compacting 1@0 + 2@1 files
+2025/09/13-16:27:20.944 1770 Generated table #7208@0: 10313 keys, 189949 bytes
+2025/09/13-16:27:20.947 1770 Generated table #7209@0: 70 keys, 10026 bytes
+2025/09/13-16:27:20.956 1770 Generated table #7210@0: 4866 keys, 115697 bytes
+2025/09/13-16:27:20.956 1770 Compacted 1@0 + 2@1 files => 315672 bytes
+2025/09/13-16:27:20.957 1770 compacted to: files[ 0 3 40 31 0 0 0 ]
+2025/09/13-16:27:20.957 1770 Delete type=2 #7207
+2025/09/13-16:27:20.957 1770 Manual compaction at level-0 from '\x00\xaa\x00\x00\x05' @ 11155171 : 1 .. '\x00\xab\x00\x00\x00' @ 0 : 0; will stop at (end)
+2025/09/13-16:27:23.032 4370 Moved #7208 to level-2 189949 bytes OK: files[ 0 2 41 31 0 0 0 ]
+2025/09/13-16:27:23.033 4370 Compacting 1@2 + 8@3 files
+2025/09/13-16:27:23.137 4370 Generated table #7211@2: 88657 keys, 2239848 bytes
+2025/09/13-16:27:23.244 4370 Generated table #7212@2: 95322 keys, 2248380 bytes
+2025/09/13-16:27:23.360 4370 Generated table #7213@2: 95249 keys, 2246815 bytes
+2025/09/13-16:27:23.468 4370 Generated table #7214@2: 98356 keys, 2250241 bytes
+2025/09/13-16:27:23.576 4370 Generated table #7215@2: 101588 keys, 2255090 bytes
+2025/09/13-16:27:23.691 4370 Generated table #7216@2: 101370 keys, 2255121 bytes
+2025/09/13-16:27:23.819 4370 Generated table #7217@2: 66360 keys, 2266561 bytes
+2025/09/13-16:27:23.869 4370 Generated table #7218@2: 22238 keys, 985302 bytes
+2025/09/13-16:27:23.869 4370 Compacted 1@2 + 8@3 files => 16747358 bytes
+2025/09/13-16:27:23.870 4370 compacted to: files[ 0 2 40 31 0 0 0 ]
+2025/09/13-16:27:23.870 4370 Delete type=2 #7173
+2025/09/13-16:27:23.870 4370 Delete type=2 #7174
+2025/09/13-16:27:23.870 4370 Delete type=2 #7197
+2025/09/13-16:27:23.870 4370 Delete type=2 #7198
+2025/09/13-16:27:23.870 4370 Delete type=2 #7199
+2025/09/13-16:27:23.870 4370 Delete type=2 #7200
+2025/09/13-16:27:23.870 4370 Delete type=2 #7201
+2025/09/13-16:27:23.871 4370 Delete type=2 #7202
+2025/09/13-16:27:23.871 4370 Delete type=2 #7203
+2025/09/13-16:27:23.871 4370 Delete type=2 #7204
+2025/09/13-16:27:23.871 4370 Delete type=2 #7208
+2025/09/13-16:27:25.891 3d38 Compacting 1@1 + 6@2 files
+2025/09/13-16:27:25.962 3d38 Generated table #7219@1: 16602 keys, 2228188 bytes
+2025/09/13-16:27:26.037 3d38 Generated table #7220@1: 18347 keys, 2321819 bytes
+2025/09/13-16:27:26.081 3d38 Generated table #7221@1: 8223 keys, 2199742 bytes
+2025/09/13-16:27:26.115 3d38 Generated table #7222@1: 10381 keys, 2137538 bytes
+2025/09/13-16:27:26.118 3d38 Generated table #7223@1: 97 keys, 13689 bytes
+2025/09/13-16:27:26.118 3d38 Compacted 1@1 + 6@2 files => 8900976 bytes
+2025/09/13-16:27:26.119 3d38 compacted to: files[ 0 1 39 31 0 0 0 ]

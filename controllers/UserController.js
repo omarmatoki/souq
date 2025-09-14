@@ -3,22 +3,22 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
+const whatsappService = require('../config/whatsapp');
 
 const SECRET_KEY = process.env.SECRET_KEY;
 
 // إعداد تخزين الملفات باستخدام Multer
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/'); // حفظ الملفات في مجلد uploads
+    cb(null, 'uploads/');
   },
   filename: function (req, file, cb) {
-    cb(null, Date.now() + path.extname(file.originalname)); // إضافة الطابع الزمني إلى اسم الملف
+    cb(null, Date.now() + path.extname(file.originalname));
   }
 });
 
-// مرشح الملفات للتحقق من الامتدادات
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif|webp/; // السماح بالصور فقط
+  const allowedTypes = /jpeg|jpg|png|gif|webp/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
 
@@ -29,11 +29,10 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// إعداد Multer لتحميل صور الهوية
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // حد أقصى 5MB
+  limits: { fileSize: 5 * 1024 * 1024 }
 }).single('id_image');
 
 // تسجيل مستخدم جديد
@@ -44,7 +43,6 @@ exports.register = async (req, res) => {
     try {
       const { username, password, whatsapp_number, role = 'merchant' } = req.body;
 
-      // باقي الكود يبقى كما هو...
       if (!username || !password) {
         return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
       }
@@ -67,23 +65,33 @@ exports.register = async (req, res) => {
         password_hash,
         whatsapp_number,
         id_image,
-        role: 'merchant' // تثبيت القيمة كـ merchant دائماً
+        role: 'merchant',
+        is_verified: whatsapp_number ? false : true // إذا لم يكن هناك رقم واتساب، فعّل الحساب مباشرة
       };
 
       const user = await db.User.create(userData);
 
-      const token = jwt.sign(
-        { user_id: user.user_id, username: user.username, role: user.role },
-        SECRET_KEY,
-        { expiresIn: '24h' }
-      );
+      // إرسال رمز التحقق تلقائياً إذا تم توفير رقم واتساب
+      let verificationSent = false;
+      if (whatsapp_number) {
+        try {
+          await whatsappService.sendVerificationCode(whatsapp_number, user.user_id);
+          verificationSent = true;
+        } catch (error) {
+          console.error('فشل في إرسال رمز التحقق:', error);
+        }
+      }
 
       const { password_hash: _, ...userWithoutPassword } = user.toJSON();
 
       res.status(201).json({
-        message: 'تم إنشاء الحساب بنجاح',
+        message: whatsapp_number 
+          ? (verificationSent ? 'تم إنشاء الحساب بنجاح. تم إرسال رمز التحقق إلى الواتساب' : 'تم إنشاء الحساب بنجاح. فشل إرسال رمز التحقق')
+          : 'تم إنشاء الحساب بنجاح',
         user: userWithoutPassword,
-        token
+        requires_verification: !!whatsapp_number,
+        verification_sent: verificationSent,
+        next_step: whatsapp_number ? 'verify_whatsapp' : 'login'
       });
     } catch (error) {
       console.error(error);
@@ -92,29 +100,51 @@ exports.register = async (req, res) => {
   });
 };
 
-// تسجيل الدخول
+
+// الحل الأول: إضافة اختيار الدور في تسجيل الدخول
 exports.login = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, role } = req.body; // إضافة role
 
-    // التحقق من البيانات المطلوبة
     if (!username || !password) {
       return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
     }
 
-    // البحث عن المستخدم مع متجره (إن وجد)
-    const user = await db.User.findOne({ 
-      where: { username },
+    // البحث عن المستخدم مع تحديد الدور (إذا تم إرساله)
+    let whereClause = { username };
+    if (role) {
+      whereClause.role = role;
+    }
+
+    const users = await db.User.findAll({ 
+      where: whereClause,
       include: [{
         model: db.Store,
-        required: false, // LEFT JOIN - لا يتطلب وجود متجر
-        attributes: ['store_id', 'store_name'] // نجلب فقط معرف المتجر واسمه
+        required: false,
+        attributes: ['store_id', 'store_name']
       }]
     });
 
-    if (!user) {
+    if (users.length === 0) {
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
+
+    // إذا كان هناك أكثر من مستخدم بنفس الاسم ولم يتم تحديد الدور
+    if (users.length > 1 && !role) {
+      const availableRoles = users.map(user => ({
+        role: user.role,
+        role_name: user.role === 'admin' ? 'مدير' : 'تاجر'
+      }));
+
+      return res.status(409).json({ 
+        error: 'يوجد أكثر من حساب بهذا الاسم',
+        message: 'يرجى تحديد نوع الحساب',
+        available_roles: availableRoles,
+        requires_role_selection: true
+      });
+    }
+
+    const user = users[0];
 
     // التحقق من كلمة المرور
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
@@ -122,43 +152,266 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
 
-    // إعداد payload للتوكن
+    // التحقق من تفعيل الحساب (للتجار فقط)
+    if (user.role === 'merchant' && user.whatsapp_number && !user.is_verified) {
+      const hasActiveCode = whatsappService.verificationCodes.has(user.user_id);
+      
+      return res.status(403).json({ 
+        error: 'يجب تفعيل رقم الواتساب أولاً',
+        requires_verification: true,
+        user_id: user.user_id,
+        whatsapp_number: user.whatsapp_number,
+        has_active_code: hasActiveCode,
+        message: hasActiveCode 
+          ? 'يوجد رمز تحقق نشط. تحقق من الواتساب أو اطلب رمز جديد'
+          : 'لا يوجد رمز تحقق نشط. اطلب رمز جديد'
+      });
+    }
+
+    // إنشاء التوكن
     const tokenPayload = {
       user_id: user.user_id,
       username: user.username,
-      role: user.role
+      role: user.role,
+      is_verified: user.is_verified
     };
 
-    // إضافة store_id إلى التوكن إذا كان لدى المستخدم متجر
-    if (user.Stores && user.Stores.length > 0) {
+    // إضافة معلومات المتجر للتجار فقط
+    if (user.role === 'merchant' && user.Stores && user.Stores.length > 0) {
       tokenPayload.store_id = user.Stores[0].store_id;
     } else {
       tokenPayload.store_id = null;
     }
 
-    // إنشاء JWT token
     const token = jwt.sign(tokenPayload, SECRET_KEY, { expiresIn: '24h' });
 
-    // إعداد بيانات المستخدم للإرجاع (بدون كلمة المرور)
     const { password_hash: _, ...userWithoutPassword } = user.toJSON();
 
-    res.status(200).json({
-      message: 'تم تسجيل الدخول بنجاح',
-      user: {
-        ...userWithoutPassword,
-        store: user.Stores && user.Stores.length > 0 ? {
-          store_id: user.Stores[0].store_id,
-          store_name: user.Stores[0].store_name
-        } : null
-      },
+    // تخصيص الاستجابة حسب الدور
+    const responseData = {
+      message: `تم تسجيل الدخول بنجاح كـ${user.role === 'admin' ? 'مدير' : 'تاجر'}`,
+      user: userWithoutPassword,
       token
-    });
+    };
+
+    // إضافة معلومات المتجر للتجار
+    if (user.role === 'merchant' && user.Stores && user.Stores.length > 0) {
+      responseData.user.store = {
+        store_id: user.Stores[0].store_id,
+        store_name: user.Stores[0].store_name
+      };
+    }
+
+    res.status(200).json(responseData);
 
   } catch (error) {
-    console.error(error);
+    console.error('Error in login:', error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };
+
+// إرسال رمز التحقق (مع منع الإرسال المتكرر)
+exports.sendVerificationCode = async (req, res) => {
+  try {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ error: 'معرف المستخدم مطلوب' });
+    }
+
+    const user = await db.User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    if (!user.whatsapp_number) {
+      return res.status(400).json({ error: 'لا يوجد رقم واتساب مرتبط بهذا الحساب' });
+    }
+
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'الحساب مفعل بالفعل' });
+    }
+
+    // التحقق من وجود رمز نشط
+    const existingCode = whatsappService.verificationCodes.get(user_id);
+    if (existingCode) {
+      const timeLeft = Math.max(0, Math.floor((existingCode.expires - Date.now()) / 1000));
+      
+      // السماح بإعادة الإرسال إذا بقي أقل من دقيقتين
+      if (timeLeft > 120) {
+        return res.status(429).json({
+          error: `يوجد رمز نشط. يمكنك طلب رمز جديد بعد ${Math.floor(timeLeft / 60)} دقيقة و ${timeLeft % 60} ثانية`,
+          time_left: timeLeft,
+          can_resend_at: new Date(Date.now() + (timeLeft - 120) * 1000)
+        });
+      }
+    }
+
+    // إرسال رمز التحقق
+    const result = await whatsappService.sendVerificationCode(user.whatsapp_number, user.user_id);
+
+    res.status(200).json({
+      message: 'تم إرسال رمز التحقق بنجاح إلى الواتساب',
+      success: true,
+      phone_number: user.whatsapp_number,
+      expires_in: 300, // 5 دقائق
+      can_resend_after: 120 // يمكن إعادة الإرسال بعد دقيقتين
+    });
+
+  } catch (error) {
+    console.error('خطأ في إرسال رمز التحقق:', error);
+    res.status(500).json({
+      error: error.message || 'فشل في إرسال رمز التحقق'
+    });
+  }
+};
+
+// التحقق من رمز التحقق
+exports.verifyWhatsAppCode = async (req, res) => {
+  try {
+    const { user_id, verification_code } = req.body;
+
+    if (!user_id || !verification_code) {
+      return res.status(400).json({
+        error: 'معرف المستخدم ورمز التحقق مطلوبان'
+      });
+    }
+
+    const user = await db.User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'الحساب مفعل بالفعل' });
+    }
+
+    const verificationResult = whatsappService.verifyCode(user_id, verification_code);
+
+    if (!verificationResult.success) {
+      return res.status(400).json({
+        error: verificationResult.message,
+        can_request_new: true
+      });
+    }
+
+    // تحديث حالة المستخدم إلى مفعل
+    await user.update({ is_verified: true });
+
+    // إنشاء توكن جديد
+    const tokenPayload = {
+      user_id: user.user_id,
+      username: user.username,
+      role: user.role,
+      is_verified: true
+    };
+
+    const token = jwt.sign(tokenPayload, SECRET_KEY, { expiresIn: '24h' });
+
+    res.status(200).json({
+      message: 'تم تفعيل رقم الهاتف بنجاح',
+      verified: true,
+      token: token,
+      user: {
+        user_id: user.user_id,
+        username: user.username,
+        is_verified: true
+      }
+    });
+
+  } catch (error) {
+    console.error('خطأ في التحقق:', error);
+    res.status(500).json({
+      error: 'حدث خطأ في السيرفر'
+    });
+  }
+};
+
+// الحصول على حالة التفعيل
+exports.getVerificationStatus = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    const user = await db.User.findByPk(user_id, {
+      attributes: ['user_id', 'username', 'whatsapp_number', 'is_verified']
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    // التحقق من وجود رمز نشط
+    const activeCode = whatsappService.verificationCodes.get(parseInt(user_id));
+    let codeInfo = null;
+    
+    if (activeCode) {
+      const timeLeft = Math.max(0, Math.floor((activeCode.expires - Date.now()) / 1000));
+      codeInfo = {
+        has_active_code: true,
+        time_left: timeLeft,
+        expires_at: new Date(activeCode.expires),
+        can_resend: timeLeft <= 120 // يمكن إعادة الإرسال إذا بقي أقل من دقيقتين
+      };
+    }
+
+    res.status(200).json({
+      user_id: user.user_id,
+      username: user.username,
+      whatsapp_number: user.whatsapp_number,
+      is_verified: user.is_verified,
+      has_whatsapp: !!user.whatsapp_number,
+      verification_code_info: codeInfo,
+      next_action: user.is_verified 
+        ? 'login' 
+        : (codeInfo?.has_active_code ? 'enter_code' : 'request_code')
+    });
+
+  } catch (error) {
+    console.error('خطأ في الحصول على حالة التفعيل:', error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// إعادة إرسال رمز التحقق (endpoint منفصل للوضوح)
+exports.resendVerificationCode = async (req, res) => {
+  try {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ error: 'معرف المستخدم مطلوب' });
+    }
+
+    const user = await db.User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'الحساب مفعل بالفعل' });
+    }
+
+    // حذف الرمز القديم إن وجد
+    whatsappService.verificationCodes.delete(user_id);
+
+    // إرسال رمز جديد
+    const result = await whatsappService.sendVerificationCode(user.whatsapp_number, user.user_id);
+
+    res.status(200).json({
+      message: 'تم إعادة إرسال رمز التحقق بنجاح',
+      success: true,
+      phone_number: user.whatsapp_number,
+      expires_in: 300
+    });
+
+  } catch (error) {
+    console.error('خطأ في إعادة إرسال رمز التحقق:', error);
+    res.status(500).json({
+      error: error.message || 'فشل في إعادة إرسال رمز التحقق'
+    });
+  }
+};
+
+// باقي التوابع الموجودة... (getAllUsers, getUserById, etc.)
 
 // الحصول على جميع المستخدمين (للمسؤولين فقط)
 exports.getAllUsers = async (req, res) => {

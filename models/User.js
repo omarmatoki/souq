@@ -18,6 +18,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(20),
       allowNull: true
     },
+    is_verified: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     id_image: {
       type: DataTypes.STRING(255),
       allowNull: true

@@ -17,7 +17,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(255),
       allowNull: false
     },
-     store_address: {
+    store_address: {
       type: DataTypes.TEXT,
       allowNull: false
     },
@@ -33,11 +33,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    is_blocked: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     created_at: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
     }
-  },  {
+  }, {
     timestamps: false,
     tableName: 'Stores'
   });
