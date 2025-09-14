@@ -1,4 +1,17 @@
 const db = require('../models');
+const { Op } = require('sequelize');
+
+// استخراج النماذج من db للتأكد من الوضوح
+const { Order, OrderItem, Product, Store, User, Shipping, Cart, CartItem, Review } = db;
+
+// التحقق من وجود النماذج
+console.log('Models check:', {
+  Order: !!Order,
+  OrderItem: !!OrderItem,
+  Product: !!Product,
+  Store: !!Store,
+  Shipping: !!Shipping
+});
 
 // إنشاء الطلبات مباشرة بعد معلومات الشحن (بدون دفع حالياً)
 exports.createOrder = async (req, res) => {
@@ -14,7 +27,7 @@ exports.createOrder = async (req, res) => {
     }
     
     // العثور على معلومات الشحن باستخدام purchase_id
-    const shipping = await db.Shipping.findOne({
+    const shipping = await Shipping.findOne({
       where: { purchase_id: purchase_id }
     });
     
@@ -24,11 +37,11 @@ exports.createOrder = async (req, res) => {
     }
     
     // العثور على السلة باستخدام customer_session_id
-    const cart = await db.Cart.findOne({
+    const cart = await Cart.findOne({
       where: { session_id: shipping.customer_session_id },
       include: [{
-        model: db.CartItem,
-        include: [{ model: db.Product }]
+        model: CartItem,
+        include: [{ model: Product }]
       }]
     });
     
@@ -38,7 +51,7 @@ exports.createOrder = async (req, res) => {
     }
     
     // التحقق من عدم وجود طلبات مسبقة لنفس purchase_id
-    const existingOrders = await db.Order.findAll({
+    const existingOrders = await Order.findAll({
       where: { purchase_id: purchase_id }
     });
     
@@ -71,7 +84,7 @@ exports.createOrder = async (req, res) => {
     // إنشاء طلب منفصل لكل متجر
     for (const [store_id, storeItems] of Object.entries(itemsByStore)) {
       // التحقق من وجود المتجر
-      const store = await db.Store.findByPk(store_id);
+      const store = await Store.findByPk(store_id);
       if (!store) {
         await transaction.rollback();
         return res.status(404).json({ error: `المتجر بالمعرف ${store_id} غير موجود` });
@@ -106,24 +119,24 @@ exports.createOrder = async (req, res) => {
       }
       
       // إنشاء الطلب للمتجر الحالي
-      const order = await db.Order.create({
+      const order = await Order.create({
         store_id: parseInt(store_id),
         purchase_id: purchase_id,
         customer_session_id: shipping.customer_session_id,
         total_price: store_total_price,
-        status: 'pending', // حالة معلقة بدلاً من confirmed
-        is_programmatic: false
+        status: 'pending',
+        settlement_status: 'not_settled' // إضافة حالة التصفير الافتراضية
       }, { transaction });
       
       // إضافة عناصر الطلب
       for (const item of orderItems) {
-        await db.OrderItem.create({
+        await OrderItem.create({
           order_id: order.order_id,
           ...item
         }, { transaction });
         
-        // نقص المخزون فوراً (سيتم تعديل هذا لاحقاً عند إضافة الدفع)
-        const product = await db.Product.findByPk(item.product_id);
+        // نقص المخزون فوراً
+        const product = await Product.findByPk(item.product_id);
         await product.update({
           stock_quantity: product.stock_quantity - item.quantity
         }, { transaction });
@@ -133,28 +146,28 @@ exports.createOrder = async (req, res) => {
     }
     
     // تنظيف السلة بعد إنشاء الطلبات
-    await db.CartItem.destroy({
+    await CartItem.destroy({
       where: { cart_id: cart.cart_id }
     }, { transaction });
     
     await transaction.commit();
     
     // إرجاع جميع الطلبات المُنشأة مع التفاصيل
-    const ordersWithDetails = await db.Order.findAll({
+    const ordersWithDetails = await Order.findAll({
       where: {
         order_id: createdOrders
       },
       include: [
         {
-          model: db.OrderItem,
-          include: [{ model: db.Product }]
+          model: OrderItem,
+          include: [{ model: Product }]
         },
-        { model: db.Store }
+        { model: Store }
       ]
     });
     
     // العثور على معلومات الشحن مرة أخرى لإرجاعها
-    const finalShipping = await db.Shipping.findOne({
+    const finalShipping = await Shipping.findOne({
       where: { purchase_id: purchase_id }
     });
     
@@ -182,6 +195,7 @@ exports.createOrder = async (req, res) => {
     });
   }
 };
+
 // الحصول على جميع الطلبات
 exports.getAllOrders = async (req, res) => {
   try {
@@ -196,20 +210,17 @@ exports.getAllOrders = async (req, res) => {
       whereClause.store_id = store_id;
     }
 
-    const orders = await db.Order.findAll({
+    const orders = await Order.findAll({
       where: whereClause,
       include: [
         {
-          model: db.Store,
-          as: 'Store',
+          model: Store,
           attributes: ['store_name', 'logo_image']
         },
         {
-          model: db.OrderItem,
-          as: 'OrderItems',
-          include: [{ model: db.Product, as: 'Product' }]
-        },
-        { model: db.Shipping, as: 'Shipping' }
+          model: OrderItem,
+          include: [{ model: Product }]
+        }
       ],
       order: [['created_at', 'DESC']]
     });
@@ -224,19 +235,16 @@ exports.getAllOrders = async (req, res) => {
 // الحصول على طلب بواسطة المعرف
 exports.getOrderById = async (req, res) => {
   try {
-    const order = await db.Order.findByPk(req.params.id, {
+    const order = await Order.findByPk(req.params.id, {
       include: [
         {
-          model: db.Store,
-          as: 'Store',
+          model: Store,
           attributes: ['store_name', 'logo_image', 'store_address']
         },
         {
-          model: db.OrderItem,
-          as: 'OrderItems',
-          include: [{ model: db.Product, as: 'Product' }]
-        },
-        { model: db.Shipping, as: 'Shipping' }
+          model: OrderItem,
+          include: [{ model: Product }]
+        }
       ]
     });
 
@@ -244,7 +252,18 @@ exports.getOrderById = async (req, res) => {
       return res.status(404).json({ error: 'الطلب غير موجود' });
     }
 
-    res.status(200).json(order);
+    // جلب معلومات الشحن يدوياً
+    let shippingInfo = null;
+    if (order.purchase_id) {
+      shippingInfo = await Shipping.findOne({
+        where: { purchase_id: order.purchase_id }
+      });
+    }
+
+    const orderData = order.toJSON();
+    orderData.Shipping = shippingInfo;
+
+    res.status(200).json(orderData);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
@@ -255,8 +274,8 @@ exports.getOrderById = async (req, res) => {
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const order = await db.Order.findByPk(req.params.id, {
-      include: [{ model: db.Store, as: 'Store' }]
+    const order = await Order.findByPk(req.params.id, {
+      include: [{ model: Store }]
     });
 
     if (!order) {
@@ -288,7 +307,7 @@ exports.getStoreOrders = async (req, res) => {
     const { status } = req.query;
 
     // التحقق من ملكية المتجر
-    const store = await db.Store.findByPk(store_id);
+    const store = await Store.findByPk(store_id);
     if (!store) {
       return res.status(404).json({ error: 'المتجر غير موجود' });
     }
@@ -302,13 +321,12 @@ exports.getStoreOrders = async (req, res) => {
       whereClause.status = status;
     }
 
-    const orders = await db.Order.findAll({
+    const orders = await Order.findAll({
       where: whereClause,
       include: [
         {
-          model: db.OrderItem,
-          as: 'OrderItems',
-          include: [{ model: db.Product, as: 'Product' }]
+          model: OrderItem,
+          include: [{ model: Product }]
         }
       ],
       order: [['created_at', 'DESC']]
@@ -317,8 +335,8 @@ exports.getStoreOrders = async (req, res) => {
     // إحضار معلومات الشحن باستخدام purchase_id الصحيح
     const ordersWithShipping = await Promise.all(
       orders.map(async (order) => {
-        const shipping = await db.Shipping.findOne({
-          where: { purchase_id: order.purchase_id } // استخدم purchase_id من الطلب وليس order_id
+        const shipping = await Shipping.findOne({
+          where: { purchase_id: order.purchase_id }
         });
         return {
           ...order.toJSON(),
@@ -339,10 +357,10 @@ exports.deleteOrder = async (req, res) => {
   const transaction = await db.sequelize.transaction();
   
   try {
-    const order = await db.Order.findByPk(req.params.id, {
+    const order = await Order.findByPk(req.params.id, {
       include: [
-        { model: db.Store, as: 'Store' },
-        { model: db.OrderItem, as: 'OrderItems' }
+        { model: Store },
+        { model: OrderItem }
       ]
     });
 
@@ -366,7 +384,7 @@ exports.deleteOrder = async (req, res) => {
     // إرجاع المنتجات للمخزون إذا كان الطلب pending
     if (order.status === 'pending') {
       for (const item of order.OrderItems) {
-        const product = await db.Product.findByPk(item.product_id);
+        const product = await Product.findByPk(item.product_id);
         await product.update({
           stock_quantity: product.stock_quantity + item.quantity
         }, { transaction });
@@ -398,7 +416,7 @@ exports.createProgrammaticOrder = async (req, res) => {
     }
 
     // التحقق من وجود المتجر
-    const store = await db.Store.findByPk(store_id);
+    const store = await Store.findByPk(store_id);
     if (!store) {
       await transaction.rollback();
       return res.status(404).json({ error: 'المتجر غير موجود' });
@@ -408,7 +426,7 @@ exports.createProgrammaticOrder = async (req, res) => {
     const orderItems = [];
 
     for (const item of items) {
-      const product = await db.Product.findByPk(item.product_id);
+      const product = await Product.findByPk(item.product_id);
       if (!product) {
         await transaction.rollback();
         return res.status(404).json({ error: `المنتج بالمعرف ${item.product_id} غير موجود` });
@@ -425,16 +443,16 @@ exports.createProgrammaticOrder = async (req, res) => {
     }
 
     // إنشاء الطلب المبرمج
-    const order = await db.Order.create({
+    const order = await Order.create({
       store_id,
       total_price,
       status: 'confirmed',
-      is_programmatic: true
+      settlement_status: 'not_settled' // إضافة حالة التصفير الافتراضية
     }, { transaction });
 
     // إضافة عناصر الطلب
     for (const item of orderItems) {
-      await db.OrderItem.create({
+      await OrderItem.create({
         order_id: order.order_id,
         ...item
       }, { transaction });
@@ -443,12 +461,11 @@ exports.createProgrammaticOrder = async (req, res) => {
     await transaction.commit();
 
     // إرجاع الطلب مع التفاصيل
-    const orderWithDetails = await db.Order.findByPk(order.order_id, {
+    const orderWithDetails = await Order.findByPk(order.order_id, {
       include: [
         {
-          model: db.OrderItem,
-          as: 'OrderItems',
-          include: [{ model: db.Product, as: 'Product' }]
+          model: OrderItem,
+          include: [{ model: Product }]
         }
       ]
     });
@@ -461,135 +478,78 @@ exports.createProgrammaticOrder = async (req, res) => {
   }
 };
 
-// التابع الأول: جلب جميع الطلبات مع إحصائيات الحالة
-// التابع الأول: جلب جميع الطلبات مع إحصائيات الحالة لمتجر معين
-// التابع الأول: جلب جميع الطلبات مع إحصائيات الحالة لمتجر معين
+// جلب جميع الطلبات مع إحصائيات الحالة لمتجر معين
 exports.getAllOrdersWithStats = async (req, res) => {
   try {
     const storeId = req.params.store_id;
 
-    // التحقق من وجود store_id
     if (!storeId) {
       return res.status(400).json({ error: 'معرف المتجر مطلوب' });
     }
 
     // جلب جميع الطلبات للمتجر المحدد
-    const allOrders = await db.Order.findAll({
+    const allOrders = await Order.findAll({
       where: { store_id: storeId },
       include: [
-        {
-          model: db.Store,
-          attributes: ['store_name', 'logo_image', 'store_address']
-        },
-        {
-          model: db.OrderItem,
-          include: [{ model: db.Product }] // بدون تحديد attributes
-        }
+        { model: Store, attributes: ['store_name', 'logo_image', 'store_address'] },
+        { model: OrderItem, include: [{ model: Product }] }
       ],
       order: [['created_at', 'DESC']]
     });
 
-    // جلب الطلبات المشحونة فقط
-    const shippedOrders = await db.Order.findAll({
-      where: { 
-        store_id: storeId,
-        status: 'shipped' 
-      },
-      include: [
-        {
-          model: db.Store,
-          attributes: ['store_name', 'logo_image', 'store_address']
-        },
-        {
-          model: db.OrderItem,
-          include: [{ model: db.Product }]
-        }
-      ],
-      order: [['created_at', 'DESC']]
-    });
-
-    // جلب الطلبات غير المشحونة
-    const unshippedOrders = await db.Order.findAll({
-      where: { 
-        store_id: storeId,
-        status: {
-          [db.Sequelize.Op.ne]: 'shipped'
-        }
-      },
-      include: [
-        {
-          model: db.Store,
-          attributes: ['store_name', 'logo_image', 'store_address']
-        },
-        {
-          model: db.OrderItem,
-          include: [{ model: db.Product }]
-        }
-      ],
-      order: [['created_at', 'DESC']]
-    });
+    // تصنيف الطلبات
+    const monitoredOrders = allOrders.filter(order => order.settlement_status === 'settled');
+    const shippedOrders = allOrders.filter(order => order.status === 'shipped' && order.settlement_status !== 'settled');
+    const unshippedOrders = allOrders.filter(order => order.status !== 'shipped' && order.settlement_status !== 'settled');
 
     // دالة لتنسيق الطلبات وإضافة معلومات الشحن
     const formatOrders = async (orders) => {
-      const formattedOrders = await Promise.all(orders.map(async (order) => {
-        const orderData = order.toJSON();
-        
-        // إضافة معلومات الشحن باستخدام purchase_id
-        if (orderData.purchase_id) {
-          try {
-            const shippingInfo = await db.Shipping.findOne({
-              where: { purchase_id: orderData.purchase_id }
-            });
-            
-            if (shippingInfo) {
-              const shippingData = shippingInfo.toJSON();
-              
-              // تنسيق صور الهوية
-              if (shippingData.identity_images) {
-                try {
-                  const identityImages = JSON.parse(shippingData.identity_images);
-                  shippingData.identity_images = identityImages.map(img => {
-                    if (typeof img === 'object' && img.path) {
-                      return img.path;
-                    }
-                    return img;
-                  });
-                } catch (error) {
-                  console.error('خطأ في تحليل صور الهوية:', error);
-                  shippingData.identity_images = [];
+      const formattedOrders = await Promise.all(
+        orders.map(async (order) => {
+          const orderData = order.toJSON();
+
+          // إضافة معلومات الشحن باستخدام purchase_id
+          if (orderData.purchase_id) {
+            try {
+              const shippingInfo = await Shipping.findOne({ where: { purchase_id: orderData.purchase_id } });
+              if (shippingInfo) {
+                const shippingData = shippingInfo.toJSON();
+                if (shippingData.identity_images) {
+                  try {
+                    const identityImages = JSON.parse(shippingData.identity_images);
+                    shippingData.identity_images = identityImages.map(img => (typeof img === 'object' && img.path ? img.path : img));
+                  } catch (error) {
+                    console.error('خطأ في تحليل صور الهوية:', error);
+                    shippingData.identity_images = [];
+                  }
                 }
+                orderData.Shipping = shippingData;
+              } else {
+                orderData.Shipping = null;
               }
-              
-              orderData.Shipping = shippingData;
-            } else {
+            } catch (error) {
+              console.error('خطأ في جلب معلومات الشحن:', error);
               orderData.Shipping = null;
             }
-          } catch (error) {
-            console.error('خطأ في جلب معلومات الشحن:', error);
+          } else {
             orderData.Shipping = null;
           }
-        } else {
-          orderData.Shipping = null;
-        }
-        
-        // تنسيق صور المنتجات
-        if (orderData.OrderItems) {
-          orderData.OrderItems = orderData.OrderItems.map(item => {
-            if (item.Product && item.Product.images) {
-              try {
-                item.Product.images = JSON.parse(item.Product.images);
-              } catch (error) {
-                console.error('خطأ في تحليل صور المنتج:', error);
-                item.Product.images = [];
+
+          // تنسيق صور المنتجات
+          if (orderData.OrderItems) {
+            orderData.OrderItems = orderData.OrderItems.map(item => {
+              if (item.Product && item.Product.images) {
+                try { item.Product.images = JSON.parse(item.Product.images); } 
+                catch (error) { item.Product.images = []; }
               }
-            }
-            return item;
-          });
-        }
-        
-        return orderData;
-      }));
-      
+              return item;
+            });
+          }
+
+          return orderData;
+        })
+      );
+
       return formattedOrders;
     };
 
@@ -597,75 +557,38 @@ exports.getAllOrdersWithStats = async (req, res) => {
     const formattedAllOrders = await formatOrders(allOrders);
     const formattedShippedOrders = await formatOrders(shippedOrders);
     const formattedUnshippedOrders = await formatOrders(unshippedOrders);
-
-    // التحقق من وجود طلبات
-    if (allOrders.length === 0) {
-      return res.status(200).json({
-        message: 'لا توجد طلبات لهذا المتجر',
-        storeId: parseInt(storeId),
-        allOrders: { orders: [], count: 0, totalAmount: 0 },
-        shippedOrders: { orders: [], count: 0, totalAmount: 0 },
-        unshippedOrders: { orders: [], count: 0, totalAmount: 0 },
-        statistics: {
-          totalOrders: 0,
-          shippedCount: 0,
-          unshippedCount: 0,
-          shippedPercentage: 0,
-          unshippedPercentage: 0,
-          totalRevenue: 0,
-          shippedRevenue: 0,
-          unshippedRevenue: 0,
-          averageOrderValue: 0,
-          revenuePercentageShipped: 0,
-          revenuePercentageUnshipped: 0
-        }
-      });
-    }
+    const formattedMonitoredOrders = await formatOrders(monitoredOrders);
 
     // حساب المبالغ
-    const totalAllOrdersAmount = allOrders.reduce((sum, order) => {
-      return sum + parseFloat(order.total_price || 0);
-    }, 0);
-
-    const totalShippedOrdersAmount = shippedOrders.reduce((sum, order) => {
-      return sum + parseFloat(order.total_price || 0);
-    }, 0);
-
-    const totalUnshippedOrdersAmount = unshippedOrders.reduce((sum, order) => {
-      return sum + parseFloat(order.total_price || 0);
-    }, 0);
+    const totalAllOrdersAmount = allOrders.reduce((sum, order) => sum + parseFloat(order.total_price || 0), 0);
+    const totalShippedOrdersAmount = shippedOrders.reduce((sum, order) => sum + parseFloat(order.total_price || 0), 0);
+    const totalUnshippedOrdersAmount = unshippedOrders.reduce((sum, order) => sum + parseFloat(order.total_price || 0), 0);
+    const totalMonitoredOrdersAmount = monitoredOrders.reduce((sum, order) => sum + parseFloat(order.total_price || 0), 0);
 
     // الاستجابة النهائية
     const response = {
       storeId: parseInt(storeId),
       storeName: allOrders[0]?.Store?.store_name || 'غير محدد',
-      allOrders: {
-        orders: formattedAllOrders,
-        count: allOrders.length,
-        totalAmount: parseFloat(totalAllOrdersAmount.toFixed(2))
-      },
-      shippedOrders: {
-        orders: formattedShippedOrders,
-        count: shippedOrders.length,
-        totalAmount: parseFloat(totalShippedOrdersAmount.toFixed(2))
-      },
-      unshippedOrders: {
-        orders: formattedUnshippedOrders,
-        count: unshippedOrders.length,
-        totalAmount: parseFloat(totalUnshippedOrdersAmount.toFixed(2))
-      },
+      allOrders: { orders: formattedAllOrders, count: allOrders.length, totalAmount: parseFloat(totalAllOrdersAmount.toFixed(2)) },
+      shippedOrders: { orders: formattedShippedOrders, count: shippedOrders.length, totalAmount: parseFloat(totalShippedOrdersAmount.toFixed(2)) },
+      unshippedOrders: { orders: formattedUnshippedOrders, count: unshippedOrders.length, totalAmount: parseFloat(totalUnshippedOrdersAmount.toFixed(2)) },
+      monitoredOrders: { orders: formattedMonitoredOrders, count: monitoredOrders.length, totalAmount: parseFloat(totalMonitoredOrdersAmount.toFixed(2)) },
       statistics: {
         totalOrders: allOrders.length,
         shippedCount: shippedOrders.length,
         unshippedCount: unshippedOrders.length,
+        monitoredCount: monitoredOrders.length,
         shippedPercentage: allOrders.length > 0 ? parseFloat(((shippedOrders.length / allOrders.length) * 100).toFixed(2)) : 0,
         unshippedPercentage: allOrders.length > 0 ? parseFloat(((unshippedOrders.length / allOrders.length) * 100).toFixed(2)) : 0,
+        monitoredPercentage: allOrders.length > 0 ? parseFloat(((monitoredOrders.length / allOrders.length) * 100).toFixed(2)) : 0,
         totalRevenue: parseFloat(totalAllOrdersAmount.toFixed(2)),
         shippedRevenue: parseFloat(totalShippedOrdersAmount.toFixed(2)),
         unshippedRevenue: parseFloat(totalUnshippedOrdersAmount.toFixed(2)),
+        monitoredRevenue: 0, // دائمًا صفر كما طلبت
         averageOrderValue: allOrders.length > 0 ? parseFloat((totalAllOrdersAmount / allOrders.length).toFixed(2)) : 0,
         revenuePercentageShipped: totalAllOrdersAmount > 0 ? parseFloat(((totalShippedOrdersAmount / totalAllOrdersAmount) * 100).toFixed(2)) : 0,
-        revenuePercentageUnshipped: totalAllOrdersAmount > 0 ? parseFloat(((totalUnshippedOrdersAmount / totalAllOrdersAmount) * 100).toFixed(2)) : 0
+        revenuePercentageUnshipped: totalAllOrdersAmount > 0 ? parseFloat(((totalUnshippedOrdersAmount / totalAllOrdersAmount) * 100).toFixed(2)) : 0,
+        revenuePercentageMonitored: totalAllOrdersAmount > 0 ? parseFloat(((totalMonitoredOrdersAmount / totalAllOrdersAmount) * 100).toFixed(2)) : 0
       }
     };
 
@@ -680,30 +603,30 @@ exports.getAllOrdersWithStats = async (req, res) => {
   }
 };
 
-// التابع الثاني: تغيير حالة الطلب من غير مشحونة إلى مشحونة
+
+
+// تغيير حالة الطلب من غير مشحونة إلى مشحونة
 exports.updateOrderToShipped = async (req, res) => {
   try {
-    const { id } = req.params; // تغيير من order_id إلى id
-    const order_id = id; // للحفاظ على باقي الكود
+    const { id } = req.params;
+    const order_id = id;
 
-    // للتأكد من وصول المعامل بشكل صحيح
     console.log('Order ID from params:', id);
-    console.log('All params:', req.params);
 
     if (!id) {
       return res.status(400).json({ error: 'معرف الطلب مطلوب' });
     }
 
-    // جلب الطلب بدون include للـ Shipping
-    const order = await db.Order.findByPk(order_id, {
+    // جلب الطلب
+    const order = await Order.findByPk(order_id, {
       include: [
         {
-          model: db.Store,
+          model: Store,
           attributes: ['store_name', 'logo_image', 'store_address']
         },
         {
-          model: db.OrderItem,
-          include: [{ model: db.Product }]
+          model: OrderItem,
+          include: [{ model: Product }]
         }
       ]
     });
@@ -719,7 +642,7 @@ exports.updateOrderToShipped = async (req, res) => {
     let shippingInfo = null;
     if (order.purchase_id) {
       try {
-        shippingInfo = await db.Shipping.findOne({
+        shippingInfo = await Shipping.findOne({
           where: { purchase_id: order.purchase_id }
         });
       } catch (error) {
@@ -784,12 +707,11 @@ exports.updateOrderToShipped = async (req, res) => {
   }
 };
 
-// في ملف OrderController.js
+// تحديث طلبات المتجر المشحونة إلى مبرمجة
 exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
   try {
     const storeId = req.params.store_id;
 
-    // التحقق من صحة معرف المتجر
     if (!storeId) {
       return res.status(400).json({ 
         error: 'معرف المتجر مطلوب' 
@@ -797,32 +719,31 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
     }
 
     // البحث عن آخر طلب مشحون غير مبرمج للمتجر المحدد
-    const lastShippedOrder = await db.Order.findOne({
+    const lastShippedOrder = await Order.findOne({
       where: {
         store_id: storeId,
         status: 'shipped',
-        is_programmatic: false
+        settlement_status: 'not_settled' // استخدام settlement_status بدلاً من is_programmatic
       },
       order: [
-        ['order_id', 'DESC']  // ترتيب تنازلي للحصول على آخر طلب
+        ['order_id', 'DESC']
       ]
     });
 
-    // التحقق من وجود طلبات تتطابق مع الشروط
     if (!lastShippedOrder) {
       return res.status(404).json({ 
-        error: 'لا توجد طلبات مشحونة غير مبرمجة لهذا المتجر' 
+        error: 'لا توجد طلبات مشحونة غير مصفرة لهذا المتجر' 
       });
     }
 
-    // جلب جميع الطلبات المشحونة غير المبرمجة من آخر طلب وما قبله
-    const ordersToUpdate = await db.Order.findAll({
+    // جلب جميع الطلبات المشحونة غير المصفرة من آخر طلب وما قبله
+    const ordersToUpdate = await Order.findAll({
       where: {
         store_id: storeId,
         status: 'shipped',
-        is_programmatic: false,
+        settlement_status: 'not_settled',
         order_id: {
-          [db.Sequelize.Op.lte]: lastShippedOrder.order_id  // أقل من أو يساوي آخر طلب
+          [Op.lte]: lastShippedOrder.order_id
         }
       },
       order: [
@@ -830,43 +751,40 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
       ]
     });
 
-    // تحديث جميع هذه الطلبات
-    const updateResult = await db.Order.update(
-      { is_programmatic: true },
+    // تحديث جميع هذه الطلبات إلى settlement_requested
+    const updateResult = await Order.update(
+      { settlement_status: 'settlement_requested', settlement_requested_at: new Date() },
       { 
         where: {
           store_id: storeId,
           status: 'shipped',
-          is_programmatic: false,
+          settlement_status: 'not_settled',
           order_id: {
-            [db.Sequelize.Op.lte]: lastShippedOrder.order_id
+            [Op.lte]: lastShippedOrder.order_id
           }
         }
       }
     );
 
     // جلب الطلبات المحدثة مع بياناتها الكاملة
-    const updatedOrders = await db.Order.findAll({
+    const updatedOrders = await Order.findAll({
       where: {
         store_id: storeId,
         status: 'shipped',
-        is_programmatic: true,
+        settlement_status: 'settlement_requested',
         order_id: {
-          [db.Sequelize.Op.lte]: lastShippedOrder.order_id
+          [Op.lte]: lastShippedOrder.order_id
         }
       },
       include: [
         {
-          model: db.Store,
-          as: 'Store',
+          model: Store,
           attributes: ['store_name', 'logo_image', 'store_address']
         },
         {
-          model: db.OrderItem,
-          as: 'OrderItems',
-          include: [{ model: db.Product, as: 'Product' }]
-        },
-        { model: db.Shipping, as: 'Shipping' }
+          model: OrderItem,
+          include: [{ model: Product }]
+        }
       ],
       order: [
         ['order_id', 'DESC']
@@ -874,7 +792,7 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
     });
 
     res.status(200).json({
-      message: `تم تحديث ${updateResult[0]} طلب مشحون إلى مبرمج بنجاح للمتجر`,
+      message: `تم طلب تصفير ${updateResult[0]} طلب مشحون للمتجر`,
       store_id: storeId,
       updated_count: updateResult[0],
       last_order_id: lastShippedOrder.order_id,
@@ -887,33 +805,33 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('خطأ في تحديث طلبات المتجر إلى مبرمجة:', error);
+    console.error('خطأ في تحديث طلبات المتجر:', error);
     res.status(500).json({ 
       error: 'حدث خطأ في السيرفر أثناء تحديث الطلبات' 
     });
   }
 };
 
-
+// فلترة طلبات المتجر
 exports.filterStoreOrders = async (req, res) => {
   try {
     const { store_id } = req.params;
     const { 
-      customerName,     // اسم الزبون
-      productName,      // اسم المنتج
-      orderStatus,      // حالة الطلب
-      shippingStatus,   // حالة الشحن
-      dateFrom,         // من تاريخ
-      dateTo,           // إلى تاريخ
-      page = 1,         // رقم الصفحة
-      limit = 20        // عدد الطلبات في الصفحة
+      customerName,
+      productName,
+      orderStatus,
+      shippingStatus,
+      dateFrom,
+      dateTo,
+      page = 1,
+      limit = 20
     } = req.query;
 
     // جلب بيانات المتجر مع صاحب المتجر
-    const store = await db.Store.findByPk(store_id, {
+    const store = await Store.findByPk(store_id, {
       include: [
         {
-          model: db.User,
+          model: User,
           attributes: ['username', 'whatsapp_number']
         }
       ]
@@ -938,39 +856,38 @@ exports.filterStoreOrders = async (req, res) => {
     if (dateFrom || dateTo) {
       whereConditions.created_at = {};
       if (dateFrom) {
-        whereConditions.created_at[db.Sequelize.Op.gte] = new Date(dateFrom);
+        whereConditions.created_at[Op.gte] = new Date(dateFrom);
       }
       if (dateTo) {
         const endDate = new Date(dateTo);
         endDate.setHours(23, 59, 59, 999);
-        whereConditions.created_at[db.Sequelize.Op.lte] = endDate;
+        whereConditions.created_at[Op.lte] = endDate;
       }
     }
 
     // إذا كان هناك بحث بالزبون أو المنتج، نحتاج لاستعلامات فرعية
     if (customerName && customerName.trim()) {
       // البحث في جدول الشحن عن اسم الزبون
-      const shippingOrderIds = await db.Shipping.findAll({
+      const shippingOrderIds = await Shipping.findAll({
         where: {
-          [db.Sequelize.Op.or]: [
+          [Op.or]: [
             {
               customer_name: {
-                [db.Sequelize.Op.like]: `%${customerName.trim()}%`
+                [Op.like]: `%${customerName.trim()}%`
               }
             },
             {
               recipient_name: {
-                [db.Sequelize.Op.like]: `%${customerName.trim()}%`
+                [Op.like]: `%${customerName.trim()}%`
               }
             }
           ]
         },
-        attributes: ['order_id']
+        attributes: ['purchase_id']
       });
 
-      const orderIds = shippingOrderIds.map(s => s.order_id);
-      if (orderIds.length === 0) {
-        // لا توجد طلبات تطابق اسم الزبون
+      const purchaseIds = shippingOrderIds.map(s => s.purchase_id);
+      if (purchaseIds.length === 0) {
         return res.status(200).json({
           ...store.toJSON(),
           Products: [],
@@ -987,17 +904,17 @@ exports.filterStoreOrders = async (req, res) => {
         });
       }
 
-      whereConditions.order_id = {
-        [db.Sequelize.Op.in]: orderIds
+      whereConditions.purchase_id = {
+        [Op.in]: purchaseIds
       };
     }
 
     if (productName && productName.trim()) {
       // البحث في المنتجات ثم في OrderItems
-      const products = await db.Product.findAll({
+      const products = await Product.findAll({
         where: {
           name: {
-            [db.Sequelize.Op.like]: `%${productName.trim()}%`
+            [Op.like]: `%${productName.trim()}%`
           }
         },
         attributes: ['product_id']
@@ -1005,7 +922,6 @@ exports.filterStoreOrders = async (req, res) => {
 
       const productIds = products.map(p => p.product_id);
       if (productIds.length === 0) {
-        // لا توجد منتجات تطابق الاسم
         return res.status(200).json({
           ...store.toJSON(),
           Products: [],
@@ -1022,10 +938,10 @@ exports.filterStoreOrders = async (req, res) => {
         });
       }
 
-      const orderItems = await db.OrderItem.findAll({
+      const orderItems = await OrderItem.findAll({
         where: {
           product_id: {
-            [db.Sequelize.Op.in]: productIds
+            [Op.in]: productIds
           }
         },
         attributes: ['order_id']
@@ -1052,14 +968,14 @@ exports.filterStoreOrders = async (req, res) => {
       // دمج شروط order_id إذا كانت موجودة من قبل
       if (whereConditions.order_id) {
         whereConditions.order_id = {
-          [db.Sequelize.Op.and]: [
+          [Op.and]: [
             whereConditions.order_id,
-            { [db.Sequelize.Op.in]: orderIds }
+            { [Op.in]: orderIds }
           ]
         };
       } else {
         whereConditions.order_id = {
-          [db.Sequelize.Op.in]: orderIds
+          [Op.in]: orderIds
         };
       }
     }
@@ -1068,7 +984,7 @@ exports.filterStoreOrders = async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     // جلب الطلبات الأساسية
-    const { count, rows: orders } = await db.Order.findAndCountAll({
+    const { count, rows: orders } = await Order.findAndCountAll({
       where: whereConditions,
       limit: parseInt(limit),
       offset: offset,
@@ -1079,10 +995,10 @@ exports.filterStoreOrders = async (req, res) => {
     const orderIds = orders.map(order => order.order_id);
     const shippingData = {};
     if (orderIds.length > 0) {
-      const shippings = await db.Shipping.findAll({
+      const shippings = await Shipping.findAll({
         where: {
-          order_id: {
-            [db.Sequelize.Op.in]: orderIds
+          purchase_id: {
+            [Op.in]: orders.map(o => o.purchase_id).filter(p => p)
           }
         }
       });
@@ -1093,7 +1009,11 @@ exports.filterStoreOrders = async (req, res) => {
         : shippings;
 
       filteredShippings.forEach(shipping => {
-        shippingData[shipping.order_id] = shipping;
+        // البحث عن الطلب المناسب باستخدام purchase_id
+        const matchingOrder = orders.find(o => o.purchase_id === shipping.purchase_id);
+        if (matchingOrder) {
+          shippingData[matchingOrder.order_id] = shipping;
+        }
       });
 
       // إذا كان هناك فلترة بحالة الشحن وكانت النتائج فارغة
@@ -1118,15 +1038,15 @@ exports.filterStoreOrders = async (req, res) => {
     // جلب بيانات OrderItems والمنتجات
     const orderItemsData = {};
     if (orderIds.length > 0) {
-      const orderItems = await db.OrderItem.findAll({
+      const orderItems = await OrderItem.findAll({
         where: {
           order_id: {
-            [db.Sequelize.Op.in]: orderIds
+            [Op.in]: orderIds
           }
         },
         include: [
           {
-            model: db.Product,
+            model: Product,
             attributes: ['product_id', 'name', 'price', 'images']
           }
         ]
@@ -1160,12 +1080,13 @@ exports.filterStoreOrders = async (req, res) => {
           stock_quantity: item.quantity,
           images: product.images,
           created_at: orderData.created_at,
-          averageRating: 0, // سيتم حسابه لاحقاً
+          averageRating: 0,
           reviewsCount: 0,
           stockStatus: 'متوفر',
           // معلومات إضافية خاصة بالطلب
           order_id: orderData.order_id,
           order_status: orderData.status,
+          settlement_status: orderData.settlement_status,
           customer_name: shipping?.customer_name,
           shipping_status: shipping?.shipping_status,
           total_price: orderData.total_price,
@@ -1179,10 +1100,10 @@ exports.filterStoreOrders = async (req, res) => {
     const productReviews = {};
     
     if (productIds.length > 0) {
-      const reviews = await db.Review.findAll({
+      const reviews = await Review.findAll({
         where: {
           product_id: {
-            [db.Sequelize.Op.in]: productIds
+            [Op.in]: productIds
           }
         },
         attributes: ['product_id', 'rating']
@@ -1268,7 +1189,7 @@ exports.filterStoreOrders = async (req, res) => {
 async function calculateStatistics(store_id) {
   try {
     // إحصائيات الطلبات
-    const orderStats = await db.Order.findAll({
+    const orderStats = await Order.findAll({
       where: { store_id },
       attributes: [
         [db.sequelize.fn('COUNT', db.sequelize.col('order_id')), 'totalOrders'],
@@ -1279,7 +1200,7 @@ async function calculateStatistics(store_id) {
     });
 
     // إحصائيات الطلبات حسب الحالة
-    const ordersByStatus = await db.Order.findAll({
+    const ordersByStatus = await Order.findAll({
       where: { store_id },
       attributes: [
         'status',
@@ -1290,7 +1211,7 @@ async function calculateStatistics(store_id) {
     });
 
     // إحصائيات المنتجات
-    const productStats = await db.Product.findAll({
+    const productStats = await Product.findAll({
       where: { store_id },
       attributes: [
         [db.sequelize.fn('COUNT', db.sequelize.col('product_id')), 'total'],
@@ -1308,10 +1229,10 @@ async function calculateStatistics(store_id) {
     });
 
     // إحصائيات التقييمات
-    const reviewStats = await db.Review.findAll({
+    const reviewStats = await Review.findAll({
       include: [
         {
-          model: db.Product,
+          model: Product,
           where: { store_id },
           attributes: []
         }
@@ -1366,7 +1287,7 @@ function getEmptyStatistics() {
   };
 }
 
-// تابع مساعد للحصول على إحصائيات الطلبات (محدث)
+// إحصائيات الطلبات العامة
 exports.getOrdersStatistics = async (req, res) => {
   try {
     const { store_id } = req.params;
@@ -1386,9 +1307,17 @@ exports.getOrdersStatistics = async (req, res) => {
   }
 };
 
+// ========== دوال التصفير الجديدة ==========
+
 // دالة مساعدة لحساب إحصائيات التصفير
 const calculateSettlementStatistics = async (store_id) => {
   try {
+    if (!Order) {
+      throw new Error('Order model is not defined');
+    }
+
+    console.log('Calculating settlement statistics for store:', store_id);
+    
     // الحصول على إحصائيات مفصلة حسب حالة التصفير
     const stats = await Order.findAll({
       attributes: [
@@ -1403,6 +1332,8 @@ const calculateSettlementStatistics = async (store_id) => {
       group: ['settlement_status'],
       raw: true
     });
+
+    console.log('Raw settlement stats from DB:', stats);
 
     // تنسيق النتائج
     const formattedStats = {
@@ -1430,7 +1361,7 @@ const calculateSettlementStatistics = async (store_id) => {
     stats.forEach(stat => {
       if (formattedStats[stat.settlement_status]) {
         formattedStats[stat.settlement_status] = {
-          count: parseInt(stat.count),
+          count: parseInt(stat.count) || 0,
           total_amount: parseFloat(stat.total_amount || 0).toFixed(2),
           average_amount: parseFloat(stat.average_amount || 0).toFixed(2),
           label: formattedStats[stat.settlement_status].label
@@ -1459,5 +1390,717 @@ const calculateSettlementStatistics = async (store_id) => {
   } catch (error) {
     console.error('Error calculating settlement statistics:', error);
     throw error;
+  }
+};
+
+// التابع الرئيسي للحصول على إحصائيات التصفير
+exports.getSettlementStatistics = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    
+    console.log('getSettlementStatistics called for store_id:', store_id);
+    
+    const statistics = await calculateSettlementStatistics(store_id);
+
+    res.status(200).json({
+      success: true,
+      data: statistics
+    });
+
+  } catch (error) {
+    console.error('Error in getSettlementStatistics:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// تابع مُصحح للحصول على جميع المتاجر التي طلبت التصفير
+exports.getPendingSettlementOrders = async (req, res) => {
+  try {
+    // الحصول على جميع الطلبات التي في حالة "تم الطلب" (settlement_requested)
+    const pendingOrders = await Order.findAll({
+      where: {
+        settlement_status: 'settlement_requested'
+      },
+      attributes: [
+        'order_id',
+        'store_id',
+        'purchase_id',
+        'total_price',
+        'status',
+        'settlement_status',
+        'settlement_requested_at',
+        'created_at'
+      ],
+      include: [
+        {
+          model: Store,
+          attributes: ['store_id', 'store_name', 'store_address', 'user_id'],
+          include: [
+            {
+              model: User,
+              // ✅ إزالة email من attributes لأنه غير موجود في الجدول
+              attributes: ['user_id', 'username', 'whatsapp_number']
+            }
+          ]
+        }
+      ],
+      order: [['settlement_requested_at', 'DESC']]
+    });
+
+    if (pendingOrders.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'لا توجد طلبات معلقة للتصفير حالياً',
+        data: {
+          stores: [],
+          summary: {
+            total_stores: 0,
+            total_orders: 0,
+            total_amount: '0.00'
+          }
+        }
+      });
+    }
+
+    // تجميع الطلبات حسب المتجر
+    const storeGroups = {};
+    
+    pendingOrders.forEach(order => {
+      const store = order.Store;
+      const storeId = store.store_id;
+      
+      if (!storeGroups[storeId]) {
+        storeGroups[storeId] = {
+          store_info: {
+            store_id: store.store_id,
+            store_name: store.store_name,
+            store_address: store.store_address,
+            owner: {
+              user_id: store.User.user_id,
+              username: store.User.username,
+              // ✅ إزالة email من البيانات المُعادة
+              whatsapp_number: store.User.whatsapp_number
+            }
+          },
+          orders: [],
+          summary: {
+            orders_count: 0,
+            total_amount: 0,
+            oldest_request_date: null,
+            newest_request_date: null
+          }
+        };
+      }
+      
+      // إضافة الطلب للمتجر
+      const orderData = {
+        order_id: order.order_id,
+        purchase_id: order.purchase_id,
+        total_price: parseFloat(order.total_price),
+        status: order.status,
+        settlement_requested_at: order.settlement_requested_at,
+        created_at: order.created_at,
+        days_since_request: Math.floor((new Date() - new Date(order.settlement_requested_at)) / (1000 * 60 * 60 * 24))
+      };
+      
+      storeGroups[storeId].orders.push(orderData);
+      storeGroups[storeId].summary.orders_count++;
+      storeGroups[storeId].summary.total_amount += parseFloat(order.total_price);
+      
+      // تحديث تواريخ أقدم وأحدث طلب
+      const requestDate = new Date(order.settlement_requested_at);
+      if (!storeGroups[storeId].summary.oldest_request_date || requestDate < new Date(storeGroups[storeId].summary.oldest_request_date)) {
+        storeGroups[storeId].summary.oldest_request_date = order.settlement_requested_at;
+      }
+      if (!storeGroups[storeId].summary.newest_request_date || requestDate > new Date(storeGroups[storeId].summary.newest_request_date)) {
+        storeGroups[storeId].summary.newest_request_date = order.settlement_requested_at;
+      }
+    });
+
+    // تحويل إلى مصفوفة وترتيب حسب إجمالي المبلغ (من الأكبر للأصغر)
+    const storesArray = Object.values(storeGroups).map(storeGroup => ({
+      ...storeGroup,
+      summary: {
+        ...storeGroup.summary,
+        total_amount: storeGroup.summary.total_amount.toFixed(2),
+        average_order_value: (storeGroup.summary.total_amount / storeGroup.summary.orders_count).toFixed(2)
+      }
+    })).sort((a, b) => parseFloat(b.summary.total_amount) - parseFloat(a.summary.total_amount));
+
+    // حساب الإحصائيات الإجمالية
+    const totalSummary = {
+      total_stores: storesArray.length,
+      total_orders: pendingOrders.length,
+      total_amount: pendingOrders.reduce((sum, order) => sum + parseFloat(order.total_price), 0).toFixed(2),
+      average_amount_per_store: storesArray.length > 0 ? 
+        (pendingOrders.reduce((sum, order) => sum + parseFloat(order.total_price), 0) / storesArray.length).toFixed(2) : '0.00',
+      average_orders_per_store: storesArray.length > 0 ? 
+        Math.round(pendingOrders.length / storesArray.length) : 0
+    };
+
+    // إضافة ترتيب للمتاجر
+    const storesWithRanking = storesArray.map((store, index) => ({
+      ...store,
+      rank: index + 1,
+      percentage_of_total: totalSummary.total_amount > 0 ? 
+        ((parseFloat(store.summary.total_amount) / parseFloat(totalSummary.total_amount)) * 100).toFixed(2) + '%' : '0%'
+    }));
+
+    res.status(200).json({
+      success: true,
+      message: `تم العثور على ${storesArray.length} متجر لديه طلبات معلقة للتصفير`,
+      data: {
+        stores: storesWithRanking,
+        summary: totalSummary,
+        metadata: {
+          generated_at: new Date().toISOString(),
+          currency: 'ر.س',
+          settlement_status: 'settlement_requested'
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getPendingSettlementOrders:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر أثناء جلب الطلبات المعلقة للتصفير',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// تابع مُصحح للحصول على تفاصيل متجر واحد فقط
+exports.getStorePendingSettlement = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    
+    // للتأكد من وجود المتجر
+    const store = await Store.findByPk(store_id, {
+      include: [
+        {
+          model: User,
+          // ✅ إزالة email من attributes
+          attributes: ['user_id', 'username', 'whatsapp_number']
+        }
+      ]
+    });
+
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        error: 'المتجر غير موجود'
+      });
+    }
+
+    // الحصول على طلبات هذا المتجر المعلقة للتصفير
+    const pendingOrders = await Order.findAll({
+      where: {
+        store_id: store_id,
+        settlement_status: 'settlement_requested'
+      },
+      attributes: [
+        'order_id',
+        'purchase_id',
+        'total_price',
+        'status',
+        'settlement_requested_at',
+        'created_at'
+      ],
+      order: [['settlement_requested_at', 'DESC']]
+    });
+
+    if (pendingOrders.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'لا توجد طلبات معلقة للتصفير لهذا المتجر',
+        data: {
+          store_info: {
+            store_id: store.store_id,
+            store_name: store.store_name,
+            store_address: store.store_address,
+            owner: {
+              user_id: store.User.user_id,
+              username: store.User.username,
+              // ✅ إزالة email
+              whatsapp_number: store.User.whatsapp_number
+            }
+          },
+          orders: [],
+          summary: {
+            orders_count: 0,
+            total_amount: '0.00'
+          }
+        }
+      });
+    }
+
+    // تنسيق الطلبات
+    const formattedOrders = pendingOrders.map(order => ({
+      order_id: order.order_id,
+      purchase_id: order.purchase_id,
+      total_price: parseFloat(order.total_price),
+      status: order.status,
+      settlement_requested_at: order.settlement_requested_at,
+      created_at: order.created_at,
+      days_since_request: Math.floor((new Date() - new Date(order.settlement_requested_at)) / (1000 * 60 * 60 * 24))
+    }));
+
+    // حساب الإحصائيات
+    const totalAmount = pendingOrders.reduce((sum, order) => sum + parseFloat(order.total_price), 0);
+
+    const response = {
+      store_info: {
+        store_id: store.store_id,
+        store_name: store.store_name,
+        store_address: store.store_address,
+        owner: {
+          user_id: store.User.user_id,
+          username: store.User.username,
+          // ✅ إزالة email
+          whatsapp_number: store.User.whatsapp_number
+        }
+      },
+      orders: formattedOrders,
+      summary: {
+        orders_count: pendingOrders.length,
+        total_amount: totalAmount.toFixed(2),
+        average_order_value: (totalAmount / pendingOrders.length).toFixed(2),
+        oldest_request_date: pendingOrders[pendingOrders.length - 1]?.settlement_requested_at,
+        newest_request_date: pendingOrders[0]?.settlement_requested_at
+      }
+    };
+
+    res.status(200).json({
+      success: true,
+      data: response
+    });
+
+  } catch (error) {
+    console.error('Error in getStorePendingSettlement:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر أثناء جلب طلبات التصفير للمتجر' 
+    });
+  }
+};
+
+// تابع إضافي للحصول على تفاصيل متجر واحد فقط (إذا كان مطلوباً)
+exports.getStorePendingSettlement = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    
+    // للتأكد من وجود المتجر
+    const store = await Store.findByPk(store_id, {
+      include: [
+        {
+          model: User,
+          attributes: ['user_id', 'username', 'email', 'whatsapp_number']
+        }
+      ]
+    });
+
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        error: 'المتجر غير موجود'
+      });
+    }
+
+    // الحصول على طلبات هذا المتجر المعلقة للتصفير
+    const pendingOrders = await Order.findAll({
+      where: {
+        store_id: store_id,
+        settlement_status: 'settlement_requested'
+      },
+      attributes: [
+        'order_id',
+        'purchase_id',
+        'total_price',
+        'status',
+        'settlement_requested_at',
+        'created_at'
+      ],
+      order: [['settlement_requested_at', 'DESC']]
+    });
+
+    if (pendingOrders.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'لا توجد طلبات معلقة للتصفير لهذا المتجر',
+        data: {
+          store_info: {
+            store_id: store.store_id,
+            store_name: store.store_name,
+            store_address: store.store_address,
+            owner: {
+              user_id: store.User.user_id,
+              username: store.User.username,
+              email: store.User.email,
+              whatsapp_number: store.User.whatsapp_number
+            }
+          },
+          orders: [],
+          summary: {
+            orders_count: 0,
+            total_amount: '0.00'
+          }
+        }
+      });
+    }
+
+    // تنسيق الطلبات
+    const formattedOrders = pendingOrders.map(order => ({
+      order_id: order.order_id,
+      purchase_id: order.purchase_id,
+      total_price: parseFloat(order.total_price),
+      status: order.status,
+      settlement_requested_at: order.settlement_requested_at,
+      created_at: order.created_at,
+      days_since_request: Math.floor((new Date() - new Date(order.settlement_requested_at)) / (1000 * 60 * 60 * 24))
+    }));
+
+    // حساب الإحصائيات
+    const totalAmount = pendingOrders.reduce((sum, order) => sum + parseFloat(order.total_price), 0);
+
+    const response = {
+      store_info: {
+        store_id: store.store_id,
+        store_name: store.store_name,
+        store_address: store.store_address,
+        owner: {
+          user_id: store.User.user_id,
+          username: store.User.username,
+          email: store.User.email,
+          whatsapp_number: store.User.whatsapp_number
+        }
+      },
+      orders: formattedOrders,
+      summary: {
+        orders_count: pendingOrders.length,
+        total_amount: totalAmount.toFixed(2),
+        average_order_value: (totalAmount / pendingOrders.length).toFixed(2),
+        oldest_request_date: pendingOrders[pendingOrders.length - 1]?.settlement_requested_at,
+        newest_request_date: pendingOrders[0]?.settlement_requested_at
+      }
+    };
+
+    res.status(200).json({
+      success: true,
+      data: response
+    });
+
+  } catch (error) {
+    console.error('Error in getStorePendingSettlement:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر أثناء جلب طلبات التصفير للمتجر' 
+    });
+  }
+};
+
+// دالة مساعدة لطلب تصفير الطلبات
+const requestOrdersSettlement = async (store_id) => {
+  try {
+    if (!Order) {
+      throw new Error('Order model is not defined');
+    }
+
+    console.log('Requesting settlement for store:', store_id);
+
+    // البحث عن جميع الطلبات غير المصفرة
+    const ordersToUpdate = await Order.findAll({
+      where: {
+        store_id: store_id,
+        settlement_status: 'not_settled'
+      }
+    });
+
+    console.log('Found orders to update:', ordersToUpdate.length);
+
+    if (ordersToUpdate.length === 0) {
+      return {
+        success: false,
+        message: 'لم يتم موافقة الادمن على تصفير الطلبات السابقة',
+        ordersCount: 0
+      };
+    }
+
+    // حساب إجمالي المبلغ
+    const totalAmount = ordersToUpdate.reduce((sum, order) => {
+      return sum + parseFloat(order.total_price || 0);
+    }, 0);
+
+    // تحديث جميع الطلبات إلى حالة "تم الطلب"
+    const [updatedCount] = await Order.update(
+      {
+        settlement_status: 'settlement_requested',
+        settlement_requested_at: new Date()
+      },
+      {
+        where: {
+          store_id: store_id,
+          settlement_status: 'not_settled'
+        }
+      }
+    );
+
+    console.log('Updated orders count:', updatedCount);
+
+    return {
+      success: true,
+      message: `تم طلب تصفير ${updatedCount} طلب بنجاح`,
+      ordersCount: updatedCount,
+      totalAmount: totalAmount.toFixed(2),
+      updatedOrders: ordersToUpdate.map(order => ({
+        order_id: order.order_id,
+        total_price: order.total_price,
+        created_at: order.created_at
+      }))
+    };
+
+  } catch (error) {
+    console.error('Error requesting orders settlement:', error);
+    throw error;
+  }
+};
+
+// التابع لطلب تصفير الطلبات
+exports.requestOrdersSettlement = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    
+    console.log('requestOrdersSettlement called for store_id:', store_id);
+    
+    const result = await requestOrdersSettlement(store_id);
+
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        data: result
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.message
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in requestOrdersSettlement:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// دالة مساعدة للموافقة على التصفير
+const approveOrdersSettlement = async (store_id, admin_id = null) => {
+  try {
+    if (!Order) {
+      throw new Error('Order model is not defined');
+    }
+
+    console.log('Approving settlement for store:', store_id);
+
+    // البحث عن جميع الطلبات التي تم طلب تصفيرها
+    const ordersToSettle = await Order.findAll({
+      where: {
+        store_id: store_id,
+        settlement_status: 'settlement_requested'
+      }
+    });
+
+    console.log('Found orders to settle:', ordersToSettle.length);
+
+    if (ordersToSettle.length === 0) {
+      return {
+        success: false,
+        message: 'لا توجد طلبات في انتظار الموافقة على التصفير',
+        ordersCount: 0
+      };
+    }
+
+    // حساب إجمالي المبلغ المراد تصفيره
+    const totalAmount = ordersToSettle.reduce((sum, order) => {
+      return sum + parseFloat(order.total_price || 0);
+    }, 0);
+
+    // تحديث جميع الطلبات إلى حالة "تم التصفير"
+    const [updatedCount] = await Order.update(
+      {
+        settlement_status: 'settled',
+        settled_at: new Date()
+      },
+      {
+        where: {
+          store_id: store_id,
+          settlement_status: 'settlement_requested'
+        }
+      }
+    );
+
+    console.log('Settled orders count:', updatedCount);
+
+    return {
+      success: true,
+      message: `تم الموافقة على تصفير ${updatedCount} طلب بإجمالي ${totalAmount.toFixed(2)}`,
+      ordersCount: updatedCount,
+      totalAmount: totalAmount.toFixed(2),
+      settledOrders: ordersToSettle.map(order => ({
+        order_id: order.order_id,
+        total_price: order.total_price,
+        created_at: order.created_at,
+        settlement_requested_at: order.settlement_requested_at
+      }))
+    };
+
+  } catch (error) {
+    console.error('Error approving orders settlement:', error);
+    throw error;
+  }
+};
+
+// التابع للموافقة على التصفير (للأدمن)
+exports.approveOrdersSettlement = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    const admin_id = req.user?.user_id; // من middleware المصادقة
+
+    console.log('approveOrdersSettlement called for store_id:', store_id, 'by admin_id:', admin_id);
+
+    // تحديث جميع الطلبات التي طلبت التصفير إلى تم الرصد
+    const [updatedCount] = await Order.update(
+      {
+        settlement_status: 'settled',          // حالة التصفير أصبحت تم الرصد
+        status: 'monitored',                    // تحديث الحالة إلى تم الرصد
+        settlement_approved_at: new Date(),    // تخزين وقت الموافقة
+        settlement_approved_by: admin_id       // تخزين رقم الأدمن الذي وافق
+      },
+      {
+        where: {
+          store_id,
+          settlement_status: 'settlement_requested'
+        }
+      }
+    );
+
+    if (updatedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'لا توجد طلبات معلقة للتصفير لهذا المتجر أو تم تصفيرها مسبقًا'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `تم تحديث ${updatedCount} طلب/طلبات إلى تم الرصد بنجاح`,
+      updatedOrders: updatedCount
+    });
+
+  } catch (error) {
+    console.error('Error in approveOrdersSettlement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'حدث خطأ في السيرفر أثناء الموافقة على التصفير',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// دالة للحصول على الطلبات حسب حالة التصفير مع pagination
+exports.getOrdersBySettlementStatus = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    const { 
+      settlement_status, 
+      page = 1, 
+      limit = 10,
+      sort_by = 'created_at',
+      sort_order = 'DESC'
+    } = req.query;
+
+    console.log('getOrdersBySettlementStatus called:', { store_id, settlement_status, page, limit });
+
+    if (!Order) {
+      throw new Error('Order model is not defined');
+    }
+
+    const offset = (page - 1) * limit;
+    const whereCondition = { store_id: store_id };
+
+    // إضافة فلتر حالة التصفير إذا تم تحديده
+    if (settlement_status) {
+      whereCondition.settlement_status = settlement_status;
+    }
+
+    // بناء ترتيب الاستعلام
+    const orderArray = [];
+    if (sort_by === 'total_price') {
+      orderArray.push(['total_price', sort_order.toUpperCase()]);
+    } else if (sort_by === 'settlement_requested_at') {
+      orderArray.push(['settlement_requested_at', sort_order.toUpperCase()]);
+    } else if (sort_by === 'settled_at') {
+      orderArray.push(['settled_at', sort_order.toUpperCase()]);
+    } else {
+      orderArray.push(['created_at', sort_order.toUpperCase()]);
+    }
+
+    const { count, rows } = await Order.findAndCountAll({
+      where: whereCondition,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: orderArray,
+      attributes: [
+        'order_id',
+        'purchase_id',
+        'total_price',
+        'status',
+        'settlement_status',
+        'settlement_requested_at',
+        'settled_at',
+        'created_at'
+      ]
+    });
+
+    // حساب إحصائيات سريعة للصفحة الحالية
+    const currentPageStats = {
+      count: rows.length,
+      total_amount: rows.reduce((sum, order) => sum + parseFloat(order.total_price), 0).toFixed(2)
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        orders: rows,
+        pagination: {
+          total: count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(count / limit)
+        },
+        current_page_stats: currentPageStats,
+        filters_applied: {
+          store_id,
+          settlement_status: settlement_status || 'all',
+          sort_by,
+          sort_order
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getOrdersBySettlementStatus:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
