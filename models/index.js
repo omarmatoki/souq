@@ -5,12 +5,7 @@ const db = {};
 db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
-// ========================================
-// 📦 استيراد جميع الموديلات مع معالجة الأخطاء
-// ========================================
-
-console.log('🚀 Starting models loading...\n');
-
+// استيراد جميع الموديلات بالأسماء الصحيحة
 try {
   db.User = require('./User')(sequelize, Sequelize);
   console.log('✅ Loaded model: User');
@@ -74,213 +69,96 @@ try {
   console.error('❌ Failed to load Review model:', error.message);
 }
 
-console.log('\n📦 Models loading completed!\n');
-
-// ========================================
-// 🔗 تعريف العلاقات بين الجداول
-// ========================================
-
+// تعريف العلاقات بين الجداول
 try {
-  console.log('🔗 Starting relations definition...\n');
-
-  // ==========================================
-  // 👤 علاقات المستخدم (User Relations)
-  // ==========================================
+  // ========== العلاقات الأساسية (بدون تغيير) ==========
   
-  // المستخدم الواحد يملك متاجر متعددة (One-to-Many)
+  // علاقة المستخدم مع المتاجر (التاجر يملك متاجر متعددة)
   db.User.hasMany(db.Store, { 
     foreignKey: 'user_id', 
-    as: 'stores',
     onDelete: 'CASCADE' 
   });
-  // كل متجر ينتمي لمستخدم واحد فقط (Many-to-One)
   db.Store.belongsTo(db.User, { 
-    foreignKey: 'user_id',
-    as: 'owner'
+    foreignKey: 'user_id' 
   });
-  console.log('✅ User ↔ Store relations defined');
 
-  // ==========================================
-  // 🏬 علاقات المتجر (Store Relations)
-  // ==========================================
-
-  // المتجر الواحد يحتوي على منتجات متعددة (One-to-Many)
+  // علاقة المتجر مع المنتجات (المتجر يحتوي على منتجات متعددة)
   db.Store.hasMany(db.Product, { 
     foreignKey: 'store_id', 
-    as: 'products',
     onDelete: 'CASCADE' 
   });
-  // كل منتج ينتمي لمتجر واحد فقط (Many-to-One)
   db.Product.belongsTo(db.Store, { 
-    foreignKey: 'store_id',
-    as: 'store'
+    foreignKey: 'store_id' 
   });
-  console.log('✅ Store ↔ Product relations defined');
 
-  // المتجر يستقبل طلبات متعددة من المشترين (One-to-Many)
+  // علاقة المتجر مع الطلبات (المتجر يستقبل طلبات متعددة من المشترين)
   db.Store.hasMany(db.Order, { 
     foreignKey: 'store_id', 
-    as: 'orders',
     onDelete: 'CASCADE' 
   });
-  // كل طلب موجه لمتجر واحد فقط (Many-to-One)
   db.Order.belongsTo(db.Store, { 
-    foreignKey: 'store_id',
-    as: 'store'
+    foreignKey: 'store_id' 
   });
-  console.log('✅ Store ↔ Order relations defined');
 
-  // ==========================================
-  // 📋 علاقات الطلب (Order Relations)
-  // ==========================================
-
-  // الطلب الواحد يحتوي على عناصر متعددة (One-to-Many)
-  // مثال: طلب واحد = (منتج أ × 2) + (منتج ب × 1) + (منتج ج × 3)
+  // علاقة الطلب مع عناصر الطلب (الطلب يحتوي على عناصر متعددة)
   db.Order.hasMany(db.OrderItem, { 
     foreignKey: 'order_id', 
-    as: 'orderItems',
     onDelete: 'CASCADE' 
   });
-  // كل عنصر طلب ينتمي لطلب واحد فقط (Many-to-One)
   db.OrderItem.belongsTo(db.Order, { 
-    foreignKey: 'order_id',
-    as: 'order'
+    foreignKey: 'order_id' 
   });
-  console.log('✅ Order ↔ OrderItem relations defined');
 
-  // ==========================================
-  // 📦 علاقات المنتج (Product Relations)
-  // ==========================================
-
-  // المنتج الواحد يمكن أن يطلبه عملاء مختلفون في طلبات مختلفة (One-to-Many)
+  // علاقة المنتج مع عناصر الطلب (المنتج يمكن أن يكون في طلبات متعددة)
   db.Product.hasMany(db.OrderItem, { 
     foreignKey: 'product_id', 
-    as: 'orderItems',
     onDelete: 'CASCADE' 
   });
-  // كل عنصر طلب يحتوي على منتج واحد فقط (Many-to-One)
   db.OrderItem.belongsTo(db.Product, { 
-    foreignKey: 'product_id',
-    as: 'product'
+    foreignKey: 'product_id' 
   });
-  console.log('✅ Product ↔ OrderItem relations defined');
 
-  // ==========================================
-  // 🛒 علاقات السلة (Cart Relations)
-  // ==========================================
-
-  // السلة الواحدة تحتوي على عناصر متعددة (One-to-Many)
+  // علاقة السلة مع عناصر السلة (السلة تحتوي على عناصر متعددة)
   db.Cart.hasMany(db.CartItem, { 
     foreignKey: 'cart_id', 
-    as: 'cartItems',
     onDelete: 'CASCADE' 
   });
-  // كل عنصر سلة ينتمي لسلة واحدة فقط (Many-to-One)
   db.CartItem.belongsTo(db.Cart, { 
-    foreignKey: 'cart_id',
-    as: 'cart'
+    foreignKey: 'cart_id' 
   });
-  console.log('✅ Cart ↔ CartItem relations defined');
 
-  // المنتج يمكن أن يُضاف لسلال تسوق متعددة (One-to-Many)
+  // علاقة المنتج مع عناصر السلة (المنتج يمكن أن يكون في سلال متعددة)
   db.Product.hasMany(db.CartItem, { 
     foreignKey: 'product_id', 
-    as: 'cartItems',
     onDelete: 'CASCADE' 
   });
-  // كل عنصر سلة يحتوي على منتج واحد (Many-to-One)
   db.CartItem.belongsTo(db.Product, { 
-    foreignKey: 'product_id',
-    as: 'product'
+    foreignKey: 'product_id' 
   });
-  console.log('✅ Product ↔ CartItem relations defined');
 
-  // ==========================================
-  // ⭐ علاقات التقييمات (Review Relations)
-  // ==========================================
-
-  // المنتج يحصل على تقييمات متعددة من المشترين (One-to-Many)
-  db.Product.hasMany(db.Review, { 
-    foreignKey: 'product_id',
-    as: 'reviews',               // اسم مستعار للعلاقة
-    onDelete: 'CASCADE',
-    scope: {
-      review_type: 'product'     // فلترة: فقط تقييمات المنتجات
-    }
-  });
-  // كل تقييم منتج ينتمي لمنتج واحد (Many-to-One)
-  db.Review.belongsTo(db.Product, { 
-    foreignKey: 'product_id',
-    as: 'product'
-  });
-  console.log('✅ Product ↔ Review relations defined');
-
-  // المتجر يحصل على تقييمات مباشرة (تقييم الخدمة، السرعة، إلخ) (One-to-Many)
-  db.Store.hasMany(db.Review, { 
-    foreignKey: 'store_id',
-    as: 'storeReviews',          // تقييمات المتجر المباشرة فقط
-    onDelete: 'CASCADE',
-    scope: {
-      review_type: 'store'       // فقط تقييمات المتاجر
-    }
-  });
-  // كل تقييم متجر ينتمي لمتجر واحد (Many-to-One)
-  db.Review.belongsTo(db.Store, { 
-    foreignKey: 'store_id',
-    as: 'store'
-  });
-  console.log('✅ Store ↔ Review (direct) relations defined');
-
-  // المتجر مع جميع التقييمات (المتجر نفسه + منتجاته) (One-to-Many)
-  db.Store.hasMany(db.Review, {
-    foreignKey: 'store_id',
-    as: 'allStoreReviews',       // جميع التقييمات المرتبطة بالمتجر
-    onDelete: 'CASCADE'          // بدون scope = جميع التقييمات
-  });
-  console.log('✅ Store ↔ Review (all) relations defined');
-
-  console.log('\n🔗 All relations defined successfully!\n');
-
-} catch (error) {
-  console.error('❌ Failed to define relations:', error.message);
-  console.error('Full error:', error);
-}
-
-// ========================================
-// 🛠️ الدوال المساعدة المخصصة (Helper Functions)
-// ========================================
-
-try {
-  console.log('🛠️ Adding helper functions...\n');
-
-  // ==========================================
-  // 📋 دوال مساعدة للطلبات (Order Helpers)
-  // ==========================================
-
-  /**
-   * الحصول على معلومات الشحن للطلب
-   * @returns {Object|null} معلومات الشحن أو null
-   */
+ 
+  // إضافة دوال مساعدة للـ Order model
   db.Order.prototype.getShippingInfo = async function() {
-    // التأكد من وجود purchase_id
     if (!this.purchase_id) {
       return null;
     }
-    
-    // البحث عن معلومات الشحن
     return await db.Shipping.findOne({
       where: { purchase_id: this.purchase_id }
     });
   };
-  console.log('✅ Order.prototype.getShippingInfo() added');
-
-  /**
-   * دالة ثابتة للحصول على الطلبات مع معلومات الشحن
-   * @param {Object} whereCondition شروط البحث
-   * @returns {Array} مصفوفة الطلبات مع معلومات الشحن
-   */
+  
+  // إضافة دوال مساعدة للـ Shipping model
+  db.Shipping.prototype.getOrderInfo = async function() {
+    if (!this.purchase_id) {
+      return null;
+    }
+    return await db.Order.findOne({
+      where: { purchase_id: this.purchase_id }
+    });
+  };
+  
+  // دالة مساعدة للحصول على الطلب مع معلومات الشحن
   db.Order.findWithShipping = async function(whereCondition) {
-    // البحث عن الطلبات
     const orders = await this.findAll({
       where: whereCondition
     });
@@ -288,7 +166,6 @@ try {
     // إضافة معلومات الشحن لكل طلب
     for (let order of orders) {
       if (order.purchase_id) {
-        // إضافة معلومات الشحن في dataValues
         order.dataValues.ShippingInfo = await db.Shipping.findOne({
           where: { purchase_id: order.purchase_id }
         });
@@ -297,39 +174,47 @@ try {
     
     return orders;
   };
-  console.log('✅ Order.findWithShipping() added');
 
-  // ==========================================
-  // 🚚 دوال مساعدة للشحن (Shipping Helpers)
-  // ==========================================
-
-  /**
-   * الحصول على معلومات الطلب من معلومات الشحن
-   * @returns {Object|null} معلومات الطلب أو null
-   */
-  db.Shipping.prototype.getOrderInfo = async function() {
-    // التأكد من وجود purchase_id
-    if (!this.purchase_id) {
-      return null;
+  // ========== علاقات التقييمات (بدون تغيير) ==========
+  
+  // علاقة المنتج مع التقييمات (المنتج يحصل على تقييمات من المشترين)
+  db.Product.hasMany(db.Review, { 
+    foreignKey: 'product_id',
+    as: 'reviews',
+    onDelete: 'CASCADE',
+    scope: {
+      review_type: 'product'  // فقط تقييمات المنتجات
     }
-    
-    // البحث عن معلومات الطلب
-    return await db.Order.findOne({
-      where: { purchase_id: this.purchase_id }
-    });
-  };
-  console.log('✅ Shipping.prototype.getOrderInfo() added');
+  });
+  db.Review.belongsTo(db.Product, { 
+    foreignKey: 'product_id',
+    as: 'product'
+  });
 
-  // ==========================================
-  // 🏬 دوال مساعدة للمتاجر (Store Helpers)
-  // ==========================================
+  // علاقة المتجر مع التقييمات المباشرة (تقييمات المتجر نفسه)
+  db.Store.hasMany(db.Review, { 
+    foreignKey: 'store_id',
+    as: 'storeReviews',
+    onDelete: 'CASCADE',
+    scope: {
+      review_type: 'store'  // فقط تقييمات المتاجر
+    }
+  });
+  db.Review.belongsTo(db.Store, { 
+    foreignKey: 'store_id',
+    as: 'store'
+  });
 
-  /**
-   * دالة للحصول على تقييمات منتجات المتجر عبر المنتجات
-   * @returns {Array} مصفوفة تقييمات منتجات المتجر
-   */
-  db.Store.prototype.getProductReviews = async function() {
-    return await db.Review.findAll({
+  // علاقة إضافية: المتجر مع جميع التقييمات (تقييمات المتجر + تقييمات منتجاته)
+  db.Store.hasMany(db.Review, {
+    foreignKey: 'store_id',
+    as: 'allStoreReviews',
+    onDelete: 'CASCADE'
+  });
+
+  // علاقة للحصول على تقييمات منتجات المتجر عبر المنتجات
+  db.Store.hasManyThrough = function() {
+    return db.Review.findAll({
       include: [
         {
           model: db.Product,
@@ -341,37 +226,21 @@ try {
       where: { review_type: 'product' }
     });
   };
-  console.log('✅ Store.prototype.getProductReviews() added');
 
-  console.log('\n🛠️ All helper functions added successfully!\n');
+  console.log('✅ All relations defined successfully');
 
 } catch (error) {
-  console.error('❌ Failed to add helper functions:', error.message);
+  console.error('❌ Failed to define relations:', error.message);
   console.error('Full error:', error);
 }
-
-// ========================================
-// 📊 إحصائيات التحميل والمراقبة
-// ========================================
 
 const modelCount = Object.keys(db).filter(key => 
   key !== 'Sequelize' && key !== 'sequelize'
 ).length;
 
-const modelNames = Object.keys(db).filter(key => 
+console.log(`📊 Total models loaded: ${modelCount}`);
+console.log(`📋 Models: ${Object.keys(db).filter(key => 
   key !== 'Sequelize' && key !== 'sequelize'
-);
-
-console.log('='.repeat(50));
-console.log('📊 DATABASE MODELS SUMMARY');
-console.log('='.repeat(50));
-console.log(`📈 Total models loaded: ${modelCount}`);
-console.log(`📋 Models: ${modelNames.join(', ')}`);
-console.log(`🔗 Relations: 15+ defined relationships`);
-console.log(`🛠️ Helper functions: 4 custom functions added`);
-console.log(`⭐ Review types: product, store`);
-console.log('='.repeat(50));
-console.log('🚀 Database models initialization completed successfully!');
-console.log('='.repeat(50));
+).join(', ')}`);
 
 module.exports = db;
