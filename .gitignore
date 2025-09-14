@@ -10,12 +10,10 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-/.wwebjs_auth
-/.wwebjs_cache
+
 # testing
 /coverage
-.wwebjs_auth/
-.wwebjs_cache/
+
 chrome_debug.log
 data_*
 f_*
