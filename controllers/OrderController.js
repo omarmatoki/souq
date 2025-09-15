@@ -1973,7 +1973,34 @@ exports.approveOrdersSettlement = async (req, res) => {
     const { store_id } = req.params;
     const admin_id = req.user?.user_id; // من middleware المصادقة
 
-    console.log('approveOrdersSettlement called for store_id:', store_id, 'by admin_id:', admin_id);
+    console.log('approveOrdersSettlement called for store_id:', store_id, 'by user_id:', admin_id);
+
+    // التحقق من وجود معرف المستخدم
+    if (!admin_id) {
+      return res.status(401).json({
+        success: false,
+        message: 'يجب تسجيل الدخول أولاً'
+      });
+    }
+
+    // التحقق من أن المستخدم هو أدمن
+    const user = await User.findByPk(admin_id);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'المستخدم غير موجود'
+      });
+    }
+
+    if (user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'غير مصرح لك بتنفيذ هذه العملية. هذه العملية مخصصة للمديرين فقط'
+      });
+    }
+
+    console.log('Admin verification passed for user:', user.username);
 
     // تحديث جميع الطلبات التي طلبت التصفير إلى تم الرصد
     const [updatedCount] = await Order.update(
@@ -1998,10 +2025,13 @@ exports.approveOrdersSettlement = async (req, res) => {
       });
     }
 
+    console.log(`Admin ${user.username} approved settlement for ${updatedCount} orders in store ${store_id}`);
+
     res.status(200).json({
       success: true,
       message: `تم تحديث ${updatedCount} طلب/طلبات إلى تم الرصد بنجاح`,
-      updatedOrders: updatedCount
+      updatedOrders: updatedCount,
+      approvedBy: user.username
     });
 
   } catch (error) {

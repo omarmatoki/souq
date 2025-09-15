@@ -825,7 +825,7 @@ const startServer = async () => {
     // مزامنة النماذج بدون حذف البيانات
     console.log('🔄 Synchronizing models without data loss...');
     await db.sequelize.sync({ 
-      alter: false, // عدم تطبيق ALTER تلقائياً
+      alter: true, // عدم تطبيق ALTER تلقائياً
       force: false  // عدم حذف الجداول الموجودة
     });
     console.log('✅ Models synchronized safely');

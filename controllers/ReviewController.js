@@ -1,61 +1,282 @@
 const db = require('../models');
 
-// إنشاء مراجعة جديدة (للمنتج أو المتجر)
+
+// إنشاء تقييم جديد
 exports.createReview = async (req, res) => {
   try {
-    const { product_id, store_id, reviewer_name, reviewer_phone, rating, comment, review_type } = req.body;
+    const { 
+      product_id, 
+      store_id, 
+      reviewer_name, 
+      reviewer_phone, 
+      rating, 
+      comment, 
+      review_type,
+      session_id
+    } = req.body;
 
-    // التحقق من وجود نوع التقييم
-    if (!review_type || !['product', 'store'].includes(review_type)) {
-      return res.status(400).json({ error: 'يجب تحديد نوع التقييم: product أو store' });
+    // التحقق من البيانات المطلوبة
+    if (!session_id) {
+      return res.status(400).json({ error: 'session_id مطلوب' });
     }
 
-    // التحقق من صحة التقييم
+    if (!review_type || !['product', 'store'].includes(review_type)) {
+      return res.status(400).json({ error: 'نوع التقييم يجب أن يكون product أو store' });
+    }
+
     if (!rating || rating < 1 || rating > 5) {
       return res.status(400).json({ error: 'التقييم يجب أن يكون بين 1 و 5' });
     }
 
-    // التحقق بناءً على نوع التقييم
+    // التحقق من الاسم فقط إذا كان هناك تعليق
+    if (comment && comment.trim().length > 0) {
+      if (!reviewer_name || reviewer_name.trim().length === 0) {
+        return res.status(400).json({ error: 'اسم المراجع مطلوب عند كتابة تعليق' });
+      }
+    }
+
+    let existingReview = null;
+    let isUpdate = false;
+
+    // التحقق من نوع التقييم
     if (review_type === 'product') {
       if (!product_id) {
-        return res.status(400).json({ error: 'يجب تحديد معرف المنتج لتقييم المنتج' });
+        return res.status(400).json({ error: 'معرف المنتج مطلوب' });
       }
-
+      
       // التحقق من وجود المنتج
       const product = await db.Product.findByPk(product_id);
       if (!product) {
         return res.status(404).json({ error: 'المنتج غير موجود' });
       }
-    } else if (review_type === 'store') {
-      if (!store_id) {
-        return res.status(400).json({ error: 'يجب تحديد معرف المتجر لتقييم المتجر' });
-      }
+      
+      // البحث عن تقييم موجود من نفس الزائر لنفس المنتج
+      existingReview = await db.Review.findOne({
+        where: { 
+          session_id, 
+          product_id,
+          review_type: 'product'
+        }
+      });
+    }
 
+    if (review_type === 'store') {
+      if (!store_id) {
+        return res.status(400).json({ error: 'معرف المتجر مطلوب' });
+      }
+      
       // التحقق من وجود المتجر
       const store = await db.Store.findByPk(store_id);
       if (!store) {
         return res.status(404).json({ error: 'المتجر غير موجود' });
       }
+      
+      // البحث عن تقييم موجود من نفس الزائر لنفس المتجر
+      existingReview = await db.Review.findOne({
+        where: { 
+          session_id, 
+          store_id,
+          review_type: 'store'
+        }
+      });
     }
 
+    // إعداد بيانات التقييم
     const reviewData = {
-      product_id: review_type === 'product' ? parseInt(product_id) : null,
-      store_id: review_type === 'store' ? parseInt(store_id) : null,
+      product_id: review_type === 'product' ? product_id : null,
+      store_id: review_type === 'store' ? store_id : null,
+      session_id,
       review_type,
-      reviewer_name,
-      reviewer_phone,
+      reviewer_name: (comment && comment.trim().length > 0) ? reviewer_name : null,
+      reviewer_phone: reviewer_phone || null,
       rating: parseInt(rating),
-      comment,
-      is_verified: false // المراجعة تحتاج موافقة
+      comment: comment || null,
+      is_verified: false,
+      updated_at: new Date()
     };
 
-    const review = await db.Review.create(reviewData);
-    res.status(201).json(review);
+    let review;
+
+    if (existingReview) {
+      // تحديث التقييم الموجود
+      await existingReview.update(reviewData);
+      review = existingReview;
+      isUpdate = true;
+    } else {
+      // إنشاء تقييم جديد
+      review = await db.Review.create(reviewData);
+      isUpdate = false;
+    }
+
+    res.status(isUpdate ? 200 : 201).json({
+      success: true,
+      message: isUpdate ? 'تم تحديث التقييم بنجاح' : 'تم إنشاء التقييم بنجاح',
+      action: isUpdate ? 'updated' : 'created',
+      review
+    });
+
   } catch (error) {
-    console.error(error);
+    console.error('Error creating/updating review:', error);
+    
     if (error.name === 'SequelizeValidationError') {
       return res.status(400).json({ error: error.message });
     }
+    
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// الحصول على تقييمات الزائر بناءً على session_id
+exports.getCustomerReviews = async (req, res) => {
+  try {
+    const { session_id } = req.params;
+
+    if (!session_id) {
+      return res.status(400).json({ error: 'session_id مطلوب' });
+    }
+
+    // الحصول على جميع التقييمات لهذا الزائر
+    const reviews = await db.Review.getBySession(session_id);
+
+    res.status(200).json({
+      message: 'تم الحصول على التقييمات بنجاح',
+      count: reviews.length,
+      reviews
+    });
+
+  } catch (error) {
+    console.error('Error getting customer reviews:', error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// الحصول على تقييمات منتج معين
+exports.getProductReviews = async (req, res) => {
+  try {
+    const { product_id } = req.params;
+    const { verified_only = false, limit = 10, offset = 0 } = req.query;
+
+    const whereCondition = {
+      product_id: parseInt(product_id),
+      review_type: 'product'
+    };
+
+    if (verified_only === 'true') {
+      whereCondition.is_verified = true;
+    }
+
+    const reviews = await db.Review.findAndCountAll({
+      where: whereCondition,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['created_at', 'DESC']]
+    });
+
+    // الحصول على إحصائيات التقييمات
+    const product = await db.Product.findByPk(product_id);
+    const stats = product ? await product.getReviewStats() : null;
+
+    res.status(200).json({
+      message: 'تم الحصول على تقييمات المنتج بنجاح',
+      stats,
+      total: reviews.count,
+      reviews: reviews.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting product reviews:', error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// الحصول على تقييمات متجر معين
+exports.getStoreReviews = async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    const { verified_only = false, limit = 10, offset = 0 } = req.query;
+
+    const whereCondition = {
+      store_id: parseInt(store_id),
+      review_type: 'store'
+    };
+
+    if (verified_only === 'true') {
+      whereCondition.is_verified = true;
+    }
+
+    const reviews = await db.Review.findAndCountAll({
+      where: whereCondition,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['created_at', 'DESC']]
+    });
+
+    // الحصول على إحصائيات التقييمات
+    const store = await db.Store.findByPk(store_id);
+    const stats = store ? await store.getReviewStats() : null;
+
+    res.status(200).json({
+      message: 'تم الحصول على تقييمات المتجر بنجاح',
+      stats,
+      total: reviews.count,
+      reviews: reviews.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting store reviews:', error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// تحديث حالة التحقق من التقييم (للمديرين)
+exports.verifyReview = async (req, res) => {
+  try {
+    const { review_id } = req.params;
+    const { is_verified } = req.body;
+
+    const review = await db.Review.findByPk(review_id);
+    if (!review) {
+      return res.status(404).json({ error: 'التقييم غير موجود' });
+    }
+
+    await review.update({ 
+      is_verified: Boolean(is_verified),
+      updated_at: new Date()
+    });
+
+    res.status(200).json({ 
+      message: 'تم تحديث حالة التحقق بنجاح', 
+      review 
+    });
+
+  } catch (error) {
+    console.error('Error verifying review:', error);
+    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+  }
+};
+
+// حذف تقييم (للمديرين أو صاحب التقييم)
+exports.deleteReview = async (req, res) => {
+  try {
+    const { review_id } = req.params;
+    const { session_id } = req.body; // للتحقق من ملكية التقييم
+
+    const review = await db.Review.findByPk(review_id);
+    if (!review) {
+      return res.status(404).json({ error: 'التقييم غير موجود' });
+    }
+
+    // التحقق من ملكية التقييم إذا تم تمرير session_id
+    if (session_id && review.session_id !== session_id) {
+      return res.status(403).json({ error: 'غير مسموح لك بحذف هذا التقييم' });
+    }
+
+    await review.destroy();
+
+    res.status(200).json({ message: 'تم حذف التقييم بنجاح' });
+
+  } catch (error) {
+    console.error('Error deleting review:', error);
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };
