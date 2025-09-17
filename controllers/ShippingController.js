@@ -91,7 +91,6 @@ exports.createShipping = async (req, res) => {
         customer_whatsapp,
         recipient_name,
         shipping_address,
-        source_address,
         destination,
         shipping_method
       } = req.body;
@@ -168,7 +167,6 @@ exports.createShipping = async (req, res) => {
         customer_whatsapp: customer_whatsapp ? customer_whatsapp.toString().trim() : null,
         recipient_name: recipient_name ? recipient_name.toString().trim() : customer_name.toString().trim(),
         shipping_address: shipping_address.toString().trim(),
-        source_address: source_address ? source_address.toString().trim() : null,
         destination: destination ? destination.toString().trim() : null,
         shipping_method: shipping_method ? shipping_method.toString().trim() : 'standard',
         shipping_status: 'preparing',

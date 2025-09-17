@@ -18,11 +18,15 @@ router.get('/profile', authMiddleware, userController.getProfile);
 router.get('/verify-token', authMiddleware, userController.verifyToken);
 router.put('/change-password', authMiddleware, userController.changePassword);
 
+// مسار الإحصائيات (للمدراء فقط)
+router.get('/admin/stats', authMiddleware, requireVerification, userController.getUsersStats);
+
 // المسارات التي تحتاج مصادقة وتفعيل
 router.get('/', authMiddleware, requireVerification, userController.getAllUsers);
 router.get('/:id', authMiddleware, requireVerification, userController.getUserById);
 router.put('/:id', authMiddleware, requireVerification, validateWhatsAppNumber, userController.updateUser);
 router.delete('/:id', authMiddleware, requireVerification, userController.deleteUser);
+
 // إعادة إرسال رمز التحقق
 router.post('/resend-verification', userController.resendVerificationCode);
 

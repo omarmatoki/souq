@@ -1,19 +1,10 @@
+// في أعلى ملف controllers/OrderController.js
 const db = require('../models');
-const { Op } = require('sequelize');
+const { sendOrderNotificationToMerchant } = require('../services/orderNotificationService');
 
-// استخراج النماذج من db للتأكد من الوضوح
-const { Order, OrderItem, Product, Store, User, Shipping, Cart, CartItem, Review } = db;
+// استيراد النماذج المطلوبة
+const { Order, OrderItem, Product, Store, Cart, CartItem, Shipping } = db;
 
-// التحقق من وجود النماذج
-console.log('Models check:', {
-  Order: !!Order,
-  OrderItem: !!OrderItem,
-  Product: !!Product,
-  Store: !!Store,
-  Shipping: !!Shipping
-});
-
-// إنشاء الطلبات مباشرة بعد معلومات الشحن (بدون دفع حالياً)
 exports.createOrder = async (req, res) => {
   const transaction = await db.sequelize.transaction();
  
@@ -107,7 +98,7 @@ exports.createOrder = async (req, res) => {
         }
         
         // حساب السعر (مع مراعاة الخصم إن وجد)
-        const finalPrice = product.getDiscountedPrice ? product.getDiscountedPrice() : product.price;
+        const finalPrice = product.getDiscountedPrice ? product.getDiscountedPrice() : parseFloat(product.price);
         const itemTotal = finalPrice * cartItem.quantity;
         store_total_price += itemTotal;
         
@@ -125,7 +116,7 @@ exports.createOrder = async (req, res) => {
         customer_session_id: shipping.customer_session_id,
         total_price: store_total_price,
         status: 'pending',
-        settlement_status: 'not_settled' // إضافة حالة التصفير الافتراضية
+        settlement_status: 'not_settled'
       }, { transaction });
       
       // إضافة عناصر الطلب
@@ -150,9 +141,13 @@ exports.createOrder = async (req, res) => {
       where: { cart_id: cart.cart_id }
     }, { transaction });
     
+    // إتمام المعاملة أولاً
     await transaction.commit();
     
-    // إرجاع جميع الطلبات المُنشأة مع التفاصيل
+    // الآن إرسال الإشعارات بعد نجاح المعاملة
+    const notificationResults = [];
+    
+    // الحصول على تفاصيل الطلبات لإرسال الإشعارات
     const ordersWithDetails = await Order.findAll({
       where: {
         order_id: createdOrders
@@ -166,10 +161,34 @@ exports.createOrder = async (req, res) => {
       ]
     });
     
+    // إرسال إشعار لكل طلب
+    for (const order of ordersWithDetails) {
+      try {
+        const result = await sendOrderNotificationToMerchant(
+          order,
+          order.OrderItems, // عناصر الطلب
+          shipping // معلومات الشحن
+        );
+        notificationResults.push(result);
+        console.log(`نتيجة الإشعار للطلب ${order.order_id}:`, result);
+      } catch (error) {
+        console.error(`فشل إرسال الإشعار للطلب ${order.order_id}:`, error);
+        notificationResults.push({
+          success: false,
+          error: error.message,
+          orderId: order.order_id
+        });
+      }
+    }
+    
     // العثور على معلومات الشحن مرة أخرى لإرجاعها
     const finalShipping = await Shipping.findOne({
       where: { purchase_id: purchase_id }
     });
+    
+    // حساب إحصائيات الإشعارات
+    const successfulNotifications = notificationResults.filter(n => n.success).length;
+    const failedNotifications = notificationResults.filter(n => !n.success).length;
     
     res.status(201).json({
       success: true,
@@ -181,7 +200,13 @@ exports.createOrder = async (req, res) => {
         customer_session_id: shipping.customer_session_id,
         total_orders: createdOrders.length,
         cart_cleared: true,
-        note: 'الطلبات في حالة معلقة - سيتم تحديثها عند إضافة نظام الدفع'
+        notifications: {
+          total_sent: successfulNotifications,
+          failed: failedNotifications,
+          success_rate: notificationResults.length > 0 ? 
+            `${Math.round((successfulNotifications / notificationResults.length) * 100)}%` : '0%',
+          details: notificationResults
+        }
       }
     });
     

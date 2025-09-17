@@ -327,9 +327,20 @@ exports.getProductById = async (req, res) => {
     // معالجة وتحليل التقييمات
     const reviews = productData.reviews || [];
     
+    // فصل التقييمات والتعليقات
+    const ratingsOnly = reviews.filter(review => review.rating && review.rating > 0); // التقييمات فقط
+    const commentsOnly = reviews.filter(review => review.comment && review.comment.trim() !== ''); // التعليقات فقط
+    const ratingsWithComments = reviews.filter(review => 
+      review.rating && review.rating > 0 && review.comment && review.comment.trim() !== ''
+    ); // التقييمات مع التعليقات
+    
     // فصل التقييمات المحققة عن غير المحققة
-    const verifiedReviews = reviews.filter(review => review.is_verified);
-    const pendingReviews = reviews.filter(review => !review.is_verified);
+    const verifiedReviews = ratingsOnly.filter(review => review.is_verified);
+    const pendingReviews = ratingsOnly.filter(review => !review.is_verified);
+    
+    // فصل التعليقات المحققة عن غير المحققة
+    const verifiedComments = commentsOnly.filter(review => review.is_verified);
+    const pendingComments = commentsOnly.filter(review => !review.is_verified);
     
     // حساب متوسط التقييم (للمحققة فقط)
     const totalVerifiedRating = verifiedReviews.reduce((sum, review) => sum + review.rating, 0);
@@ -338,9 +349,9 @@ exports.getProductById = async (req, res) => {
       : 0;
 
     // حساب متوسط التقييم لجميع التقييمات
-    const totalAllRating = reviews.reduce((sum, review) => sum + review.rating, 0);
-    const overallAverageRating = reviews.length > 0 
-      ? parseFloat((totalAllRating / reviews.length).toFixed(1))
+    const totalAllRating = ratingsOnly.reduce((sum, review) => sum + review.rating, 0);
+    const overallAverageRating = ratingsOnly.length > 0 
+      ? parseFloat((totalAllRating / ratingsOnly.length).toFixed(1))
       : 0;
 
     // إحصائيات التقييمات (1-5 نجوم)
@@ -353,43 +364,78 @@ exports.getProductById = async (req, res) => {
     };
 
     // تنسيق التقييمات للعرض
-    const formattedReviews = reviews.map(review => ({
+    const formattedRatings = ratingsOnly.map(review => ({
       review_id: review.review_id,
       reviewer_name: review.reviewer_name,
       rating: review.rating,
       comment: review.comment,
       is_verified: review.is_verified,
       created_at: review.created_at,
-      // إضافة تاريخ نسبي
+      time_ago: getTimeAgo(review.created_at)
+    }));
+
+    // تنسيق التعليقات للعرض
+    const formattedComments = commentsOnly.map(review => ({
+      review_id: review.review_id,
+      reviewer_name: review.reviewer_name,
+      comment: review.comment,
+      rating: review.rating, // قد يكون null أو 0
+      is_verified: review.is_verified,
+      created_at: review.created_at,
       time_ago: getTimeAgo(review.created_at)
     }));
 
     // ترتيب التقييمات: المحققة أولاً، ثم حسب التاريخ
-    const sortedReviews = formattedReviews.sort((a, b) => {
+    const sortedRatings = formattedRatings.sort((a, b) => {
       if (a.is_verified && !b.is_verified) return -1;
       if (!a.is_verified && b.is_verified) return 1;
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-    // إضافة معلومات التقييمات الشاملة
+    // ترتيب التعليقات: المحققة أولاً، ثم حسب التاريخ
+    const sortedComments = formattedComments.sort((a, b) => {
+      if (a.is_verified && !b.is_verified) return -1;
+      if (!a.is_verified && b.is_verified) return 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+
+    // إضافة معلومات التقييمات والتعليقات الشاملة
     productData.reviewsData = {
-      // إحصائيات عامة
-      total: reviews.length,
-      verified: verifiedReviews.length,
-      pending: pendingReviews.length,
+      // إحصائيات عامة للتقييمات
+      ratingsStats: {
+        total: ratingsOnly.length,
+        verified: verifiedReviews.length,
+        pending: pendingReviews.length,
+        averageRating: averageRating, // للمحققة فقط
+        overallAverageRating: overallAverageRating, // لجميع التقييمات
+        ratingDistribution: ratingStats,
+        performance: {
+          excellentReviews: verifiedReviews.filter(r => r.rating >= 4).length,
+          poorReviews: verifiedReviews.filter(r => r.rating <= 2).length,
+          averageReviews: verifiedReviews.filter(r => r.rating === 3).length,
+          recommendationRate: verifiedReviews.length > 0 
+            ? parseFloat(((verifiedReviews.filter(r => r.rating >= 4).length / verifiedReviews.length) * 100).toFixed(1))
+            : 0
+        }
+      },
       
-      // متوسطات التقييم
-      averageRating: averageRating, // للمحققة فقط
-      overallAverageRating: overallAverageRating, // لجميع التقييمات
-      
-      // إحصائيات النجوم
-      ratingDistribution: ratingStats,
+      // إحصائيات عامة للتعليقات
+      commentsStats: {
+        total: commentsOnly.length,
+        verified: verifiedComments.length,
+        pending: pendingComments.length,
+        withRating: ratingsWithComments.length, // التعليقات التي لها تقييم أيضاً
+        onlyComments: commentsOnly.filter(c => !c.rating || c.rating === 0).length // التعليقات فقط بدون تقييم
+      },
       
       // التقييمات مرتبة
-      reviews: sortedReviews,
+      ratings: sortedRatings,
+      
+      // التعليقات مرتبة
+      comments: sortedComments,
       
       // أحدث التقييمات المحققة (أول 3)
-      latestVerified: verifiedReviews
+      latestVerifiedRatings: verifiedReviews
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
         .slice(0, 3)
         .map(review => ({
@@ -401,14 +447,26 @@ exports.getProductById = async (req, res) => {
           created_at: review.created_at
         })),
       
-      // إحصائيات أداء التقييم
-      performance: {
-        excellentReviews: verifiedReviews.filter(r => r.rating >= 4).length,
-        poorReviews: verifiedReviews.filter(r => r.rating <= 2).length,
-        averageReviews: verifiedReviews.filter(r => r.rating === 3).length,
-        recommendationRate: verifiedReviews.length > 0 
-          ? parseFloat(((verifiedReviews.filter(r => r.rating >= 4).length / verifiedReviews.length) * 100).toFixed(1))
-          : 0
+      // أحدث التعليقات المحققة (أول 5)
+      latestVerifiedComments: verifiedComments
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 5)
+        .map(review => ({
+          reviewer_name: review.reviewer_name,
+          comment: review.comment?.length > 200 
+            ? review.comment.substring(0, 200) + '...' 
+            : review.comment,
+          rating: review.rating,
+          created_at: review.created_at,
+          time_ago: getTimeAgo(review.created_at)
+        })),
+      
+      // إجمالي البيانات
+      totalInteractions: {
+        all: reviews.length, // جميع التفاعلات
+        ratingsOnly: ratingsOnly.filter(r => !r.comment || r.comment.trim() === '').length,
+        commentsOnly: commentsOnly.filter(c => !c.rating || c.rating === 0).length,
+        both: ratingsWithComments.length // التقييم + التعليق معاً
       }
     };
 
@@ -425,6 +483,33 @@ exports.getProductById = async (req, res) => {
     res.status(500).json({ error: 'حدث خطأ في السيرفر' });
   }
 };
+
+// دالة مساعدة لحساب الوقت المنقضي (يجب إضافتها إذا لم تكن موجودة)
+function getTimeAgo(date) {
+  const now = new Date();
+  const reviewDate = new Date(date);
+  const diffInMs = now - reviewDate;
+  const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+  
+  if (diffInDays === 0) {
+    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+    if (diffInHours === 0) {
+      const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+      return diffInMinutes <= 1 ? 'الآن' : `منذ ${diffInMinutes} دقيقة`;
+    }
+    return `منذ ${diffInHours} ساعة`;
+  } else if (diffInDays === 1) {
+    return 'منذ يوم واحد';
+  } else if (diffInDays < 30) {
+    return `منذ ${diffInDays} يوم`;
+  } else if (diffInDays < 365) {
+    const months = Math.floor(diffInDays / 30);
+    return `منذ ${months} شهر`;
+  } else {
+    const years = Math.floor(diffInDays / 365);
+    return `منذ ${years} سنة`;
+  }
+}
 
 // دالة مساعدة لحساب الوقت النسبي
 function getTimeAgo(date) {

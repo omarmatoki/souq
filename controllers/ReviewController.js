@@ -1,7 +1,6 @@
 const db = require('../models');
 
 
-// إنشاء تقييم جديد
 exports.createReview = async (req, res) => {
   try {
     const { 
@@ -24,40 +23,36 @@ exports.createReview = async (req, res) => {
       return res.status(400).json({ error: 'نوع التقييم يجب أن يكون product أو store' });
     }
 
-    if (!rating || rating < 1 || rating > 5) {
+    // التحقق من وجود إما rating أو comment (أو كلاهما)
+    const hasRating = rating && rating >= 1 && rating <= 5;
+    const hasComment = comment && comment.trim().length > 0;
+
+    if (!hasRating && !hasComment) {
+      return res.status(400).json({ error: 'يجب إضافة تقييم أو تعليق على الأقل' });
+    }
+
+    // التحقق من صحة التقييم إذا كان موجوداً
+    if (rating && (rating < 1 || rating > 5)) {
       return res.status(400).json({ error: 'التقييم يجب أن يكون بين 1 و 5' });
     }
 
-    // التحقق من الاسم فقط إذا كان هناك تعليق
-    if (comment && comment.trim().length > 0) {
+    // التحقق من الاسم فقط إذا كان هناك تعليق جديد
+    if (hasComment) {
       if (!reviewer_name || reviewer_name.trim().length === 0) {
         return res.status(400).json({ error: 'اسم المراجع مطلوب عند كتابة تعليق' });
       }
     }
 
-    let existingReview = null;
-    let isUpdate = false;
-
-    // التحقق من نوع التقييم
+    // التحقق من نوع التقييم وصحة البيانات
     if (review_type === 'product') {
       if (!product_id) {
         return res.status(400).json({ error: 'معرف المنتج مطلوب' });
       }
       
-      // التحقق من وجود المنتج
       const product = await db.Product.findByPk(product_id);
       if (!product) {
         return res.status(404).json({ error: 'المنتج غير موجود' });
       }
-      
-      // البحث عن تقييم موجود من نفس الزائر لنفس المنتج
-      existingReview = await db.Review.findOne({
-        where: { 
-          session_id, 
-          product_id,
-          review_type: 'product'
-        }
-      });
     }
 
     if (review_type === 'store') {
@@ -65,64 +60,158 @@ exports.createReview = async (req, res) => {
         return res.status(400).json({ error: 'معرف المتجر مطلوب' });
       }
       
-      // التحقق من وجود المتجر
       const store = await db.Store.findByPk(store_id);
       if (!store) {
         return res.status(404).json({ error: 'المتجر غير موجود' });
       }
-      
-      // البحث عن تقييم موجود من نفس الزائر لنفس المتجر
-      existingReview = await db.Review.findOne({
-        where: { 
-          session_id, 
-          store_id,
-          review_type: 'store'
-        }
-      });
     }
 
-    // إعداد بيانات التقييم
-    const reviewData = {
-      product_id: review_type === 'product' ? product_id : null,
-      store_id: review_type === 'store' ? store_id : null,
+    // إعداد شروط البحث الأساسية
+    const baseWhereClause = {
       session_id,
-      review_type,
-      reviewer_name: (comment && comment.trim().length > 0) ? reviewer_name : null,
-      reviewer_phone: reviewer_phone || null,
-      rating: parseInt(rating),
-      comment: comment || null,
-      is_verified: false,
-      updated_at: new Date()
+      review_type
     };
 
-    let review;
-
-    if (existingReview) {
-      // تحديث التقييم الموجود
-      await existingReview.update(reviewData);
-      review = existingReview;
-      isUpdate = true;
+    if (review_type === 'product') {
+      baseWhereClause.product_id = product_id;
     } else {
-      // إنشاء تقييم جديد
-      review = await db.Review.create(reviewData);
-      isUpdate = false;
+      baseWhereClause.store_id = store_id;
     }
 
-    res.status(isUpdate ? 200 : 201).json({
-      success: true,
-      message: isUpdate ? 'تم تحديث التقييم بنجاح' : 'تم إنشاء التقييم بنجاح',
-      action: isUpdate ? 'updated' : 'created',
-      review
+    // البحث عن أي سجل موجود لنفس الجلسة والمنتج/المتجر
+    const existingRecord = await db.Review.findOne({
+      where: baseWhereClause,
+      order: [['created_at', 'DESC']]
     });
+
+    let result = null;
+    let message = '';
+
+    if (existingRecord) {
+      // إذا كان هناك سجل موجود، نحدد نوع العملية المطلوبة
+      
+      if (hasRating && hasComment) {
+        // المستخدم يريد تحديث/إضافة كل من التقييم والتعليق
+        await existingRecord.update({
+          rating: parseInt(rating),
+          comment: comment,
+          reviewer_name: reviewer_name,
+          reviewer_phone: reviewer_phone || existingRecord.reviewer_phone,
+          updated_at: new Date()
+        });
+        
+        result = existingRecord;
+        message = 'تم تحديث التقييم والتعليق بنجاح';
+        
+      } else if (hasRating && !hasComment) {
+        // المستخدم يريد تحديث التقييم فقط
+        const updateData = {
+          rating: parseInt(rating),
+          reviewer_phone: reviewer_phone || existingRecord.reviewer_phone,
+          updated_at: new Date()
+        };
+        
+        // إذا لم يكن هناك تعليق موجود من قبل، لا نمس بيانات التعليق
+        if (!existingRecord.comment) {
+          updateData.reviewer_name = null;
+        }
+        
+        await existingRecord.update(updateData);
+        result = existingRecord;
+        message = 'تم تحديث التقييم بنجاح';
+        
+      } else if (!hasRating && hasComment) {
+        // المستخدم يريد إضافة تعليق فقط
+        
+        if (existingRecord.comment) {
+          // إذا كان هناك تعليق موجود، ننشئ سجل جديد للتعليق الجديد
+          const newCommentData = {
+            product_id: review_type === 'product' ? product_id : null,
+            store_id: review_type === 'store' ? store_id : null,
+            session_id,
+            review_type,
+            reviewer_name: reviewer_name,
+            reviewer_phone: reviewer_phone || null,
+            rating: null,
+            comment: comment,
+            is_verified: false
+          };
+          
+          result = await db.Review.create(newCommentData);
+          message = 'تم إضافة التعليق الجديد بنجاح';
+          
+        } else {
+          // إذا لم يكن هناك تعليق موجود، نحدث السجل الحالي
+          await existingRecord.update({
+            comment: comment,
+            reviewer_name: reviewer_name,
+            reviewer_phone: reviewer_phone || existingRecord.reviewer_phone,
+            updated_at: new Date()
+          });
+          
+          result = existingRecord;
+          message = 'تم إضافة التعليق بنجاح';
+        }
+      }
+      
+    } else {
+      // إذا لم يكن هناك سجل موجود، ننشئ سجل جديد
+      const newReviewData = {
+        product_id: review_type === 'product' ? product_id : null,
+        store_id: review_type === 'store' ? store_id : null,
+        session_id,
+        review_type,
+        reviewer_name: hasComment ? reviewer_name : null,
+        reviewer_phone: reviewer_phone || null,
+        rating: hasRating ? parseInt(rating) : null,
+        comment: hasComment ? comment : null,
+        is_verified: false
+      };
+      
+      result = await db.Review.create(newReviewData);
+      
+      if (hasRating && hasComment) {
+        message = 'تم إضافة التقييم والتعليق بنجاح';
+      } else if (hasRating) {
+        message = 'تم إضافة التقييم بنجاح';
+      } else {
+        message = 'تم إضافة التعليق بنجاح';
+      }
+    }
+
+    // إعداد الاستجابة
+    const response = {
+      success: true,
+      message: message,
+      data: {
+        review: result
+      }
+    };
+
+    res.status(200).json(response);
 
   } catch (error) {
     console.error('Error creating/updating review:', error);
     
     if (error.name === 'SequelizeValidationError') {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ 
+        success: false,
+        error: 'خطأ في التحقق من البيانات',
+        details: error.errors.map(err => err.message)
+      });
     }
     
-    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'البيانات المدخلة مكررة'
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر' 
+    });
   }
 };
 
@@ -154,38 +243,145 @@ exports.getCustomerReviews = async (req, res) => {
 exports.getProductReviews = async (req, res) => {
   try {
     const { product_id } = req.params;
-    const { verified_only = false, limit = 10, offset = 0 } = req.query;
+    
+    console.log('🔍 البحث عن تقييمات للمنتج رقم:', product_id);
+    console.log('📋 المودلات المتاحة:', Object.keys(db));
 
-    const whereCondition = {
-      product_id: parseInt(product_id),
-      review_type: 'product'
-    };
-
-    if (verified_only === 'true') {
-      whereCondition.is_verified = true;
+    // التحقق من وجود المنتج أولاً
+    const product = await db.Product.findByPk(product_id);
+    if (!product) {
+      console.log('❌ المنتج غير موجود');
+      return res.status(404).json({
+        error: 'المنتج غير موجود',
+        product_id: parseInt(product_id)
+      });
     }
 
+    console.log('✅ تم العثور على المنتج:', product.name);
+
+    // جلب جميع التقييمات أولاً للتشخيص
+    const allReviews = await db.Review.findAll();
+    console.log('📊 إجمالي التقييمات في قاعدة البيانات:', allReviews.length);
+    
+    if (allReviews.length > 0) {
+      console.log('📋 عينة من التقييمات:', allReviews.slice(0, 3).map(r => ({
+        review_id: r.review_id,
+        product_id: r.product_id,
+        review_type: r.review_type,
+        rating: r.rating,
+        comment: r.comment ? r.comment.substring(0, 50) + '...' : 'لا يوجد تعليق'
+      })));
+    }
+
+    // جلب التقييمات للمنتج المحدد بدون شرط review_type أولاً
+    const allProductReviews = await db.Review.findAll({
+      where: {
+        product_id: parseInt(product_id)
+      }
+    });
+
+    console.log('📊 تقييمات المنتج (بدون فلتر النوع):', allProductReviews.length);
+
+    // الآن مع شرط review_type
     const reviews = await db.Review.findAndCountAll({
-      where: whereCondition,
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      order: [['created_at', 'DESC']]
+      where: {
+        product_id: parseInt(product_id),
+        review_type: 'product'
+      },
+      order: [['created_at', 'DESC']],
+      raw: false  // للحصول على كامل البيانات
     });
 
-    // الحصول على إحصائيات التقييمات
-    const product = await db.Product.findByPk(product_id);
-    const stats = product ? await product.getReviewStats() : null;
+    console.log('📊 تقييمات المنتج (مع فلتر النوع):', reviews.count);
+    
+    if (reviews.rows.length > 0) {
+      console.log('📋 التقييمات الموجودة:', reviews.rows.map(r => ({
+        id: r.review_id,
+        rating: r.rating,
+        reviewer: r.reviewer_name,
+        comment: r.comment ? r.comment.substring(0, 30) : 'لا يوجد'
+      })));
+    }
 
-    res.status(200).json({
+    // حساب الإحصائيات يدوياً
+    const validRatings = reviews.rows.filter(review => 
+      review.rating !== null && 
+      review.rating !== undefined && 
+      review.rating >= 1 && 
+      review.rating <= 5
+    );
+    
+    const totalRatings = validRatings.length;
+    const averageRating = totalRatings > 0 
+      ? validRatings.reduce((sum, review) => sum + review.rating, 0) / totalRatings 
+      : 0;
+
+    // حساب توزيع التقييمات
+    const ratingStats = {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0,
+      "5": 0
+    };
+
+    validRatings.forEach(review => {
+      ratingStats[review.rating.toString()]++;
+    });
+
+    console.log('📊 الإحصائيات المحسوبة:', {
+      totalRatings,
+      averageRating: Math.round(averageRating * 10) / 10,
+      ratingStats
+    });
+
+    // تنسيق النتيجة النهائية
+    const result = {
+      success: true,
       message: 'تم الحصول على تقييمات المنتج بنجاح',
-      stats,
-      total: reviews.count,
-      reviews: reviews.rows
-    });
+      data: {
+        product_id: parseInt(product_id),
+        product_name: product.name,
+        reviews: reviews.rows.map(review => ({
+          review_id: review.review_id,
+          reviewer_name: review.reviewer_name,
+          reviewer_phone: review.reviewer_phone,
+          rating: review.rating,
+          comment: review.comment,
+          is_verified: review.is_verified,
+          created_at: review.created_at,
+          updated_at: review.updated_at
+        })),
+        statistics: {
+          totalReviews: reviews.count,
+          averageRating: Math.round(averageRating * 10) / 10,
+          ratingStats
+        }
+      },
+      // معلومات للتشخيص (يمكن حذفها في الإنتاج)
+      debug: {
+        totalReviewsInDB: allReviews.length,
+        productReviewsWithoutFilter: allProductReviews.length,
+        productReviewsWithFilter: reviews.count
+      }
+    };
+
+    console.log('✅ إرسال النتيجة النهائية');
+    res.status(200).json(result);
 
   } catch (error) {
-    console.error('Error getting product reviews:', error);
-    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+    console.error('❌ خطأ في جلب التقييمات:', error);
+    console.error('تفاصيل الخطأ:', {
+      message: error.message,
+      stack: error.stack
+    });
+    
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 

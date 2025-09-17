@@ -4,10 +4,11 @@ const reviewController = require('../controllers/ReviewController');
 const authMiddleware = require('../middleware/authMiddleware');
 
 // المسارات العامة
+router.get('/product/:product_id', reviewController.getProductReviews);
 router.post('/', reviewController.createReview);
 router.get('/', reviewController.getAllReviews);
 router.get('/:id', reviewController.getReviewById);
-router.get('/product/:product_id', reviewController.getProductReviews);
+
 router.get('/store/:store_id', reviewController.getStoreReviews);
 
 // المسارات التي تحتاج مصادقة

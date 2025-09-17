@@ -176,36 +176,7 @@ try {
   };
   // أضف هذا الكود في ملف index.js بعد العلاقات الموجودة
 
-try {
-  // ========== علاقات التقييمات ==========
-  
-  // علاقة المنتج مع التقييمات
-  db.Product.hasMany(db.Review, { 
-    foreignKey: 'product_id',
-    as: 'reviews',
-    onDelete: 'CASCADE'
-  });
-  db.Review.belongsTo(db.Product, { 
-    foreignKey: 'product_id',
-    as: 'product'
-  });
 
-  // علاقة المتجر مع التقييمات
-  db.Store.hasMany(db.Review, { 
-    foreignKey: 'store_id',
-    as: 'storeReviews',
-    onDelete: 'CASCADE'
-  });
-  db.Review.belongsTo(db.Store, { 
-    foreignKey: 'store_id',
-    as: 'store'
-  });
-
-  console.log('✅ Review relations defined successfully');
-
-} catch (error) {
-  console.error('❌ Failed to define review relations:', error.message);
-}
 
   // ========== علاقات التقييمات (بدون تغيير) ==========
   

@@ -817,6 +817,7 @@ exports.getUsersStats = async (req, res) => {
       return res.status(403).json({ error: 'غير مصرح لك بعرض إحصائيات المستخدمين' });
     }
 
+    // === إحصائيات المستخدمين ===
     const totalUsers = await db.User.count();
     const totalMerchants = await db.User.count({ where: { role: 'merchant' } });
     const totalAdmins = await db.User.count({ where: { role: 'admin' } });
@@ -835,26 +836,261 @@ exports.getUsersStats = async (req, res) => {
       }
     });
 
+    const usersWithStores = await db.User.count({
+      include: [
+        {
+          model: db.Store,
+          required: true
+        }
+      ]
+    });
+
+    // === إحصائيات الطلبات والإيرادات ===
+    
+    // إجمالي عدد الطلبات في الموقع
+    const totalOrders = await db.Order.count();
+
+    // إجمالي الطلبات المكتملة فقط (للإيرادات الصحيحة)
+    const completedOrders = await db.Order.count({
+      where: {
+        status: {
+          [db.Sequelize.Op.in]: ['completed', 'delivered', 'confirmed']
+        }
+      }
+    });
+
+    // إجمالي الطلبات المعلقة
+    const pendingOrders = await db.Order.count({
+      where: {
+        status: 'pending'
+      }
+    });
+
+    // إجمالي الطلبات الملغية
+    const cancelledOrders = await db.Order.count({
+      where: {
+        status: {
+          [db.Sequelize.Op.in]: ['cancelled', 'refunded']
+        }
+      }
+    });
+
+    // إجمالي الإيرادات من الطلبات المكتملة
+    const totalRevenueResult = await db.Order.findOne({
+      where: {
+        status: {
+          [db.Sequelize.Op.in]: ['completed', 'delivered', 'confirmed']
+        }
+      },
+      attributes: [
+        [db.Sequelize.fn('SUM', db.Sequelize.col('total_price')), 'totalRevenue']
+      ],
+      raw: true
+    });
+
+    const totalRevenue = totalRevenueResult?.totalRevenue || 0;
+
+    // إيرادات هذا الشهر
+    const monthlyRevenueResult = await db.Order.findOne({
+      where: {
+        status: {
+          [db.Sequelize.Op.in]: ['completed', 'delivered', 'confirmed']
+        },
+        created_at: {
+          [db.Sequelize.Op.gte]: currentMonth
+        }
+      },
+      attributes: [
+        [db.Sequelize.fn('SUM', db.Sequelize.col('total_price')), 'monthlyRevenue']
+      ],
+      raw: true
+    });
+
+    const monthlyRevenue = monthlyRevenueResult?.monthlyRevenue || 0;
+
+    // === إحصائيات المنتجات ===
+    const totalProducts = await db.Product.count();
+
+    // المنتجات الجديدة هذا الشهر
+    const newProductsThisMonth = await db.Product.count({
+      where: {
+        created_at: {
+          [db.Sequelize.Op.gte]: currentMonth
+        }
+      }
+    });
+
+    // المنتجات منخفضة المخزون (أقل من 10)
+    const lowStockProducts = await db.Product.count({
+      where: {
+        stock_quantity: {
+          [db.Sequelize.Op.lt]: 10
+        }
+      }
+    });
+
+    // المنتجات نفذت من المخزون
+    const outOfStockProducts = await db.Product.count({
+      where: {
+        stock_quantity: 0
+      }
+    });
+
+    // === إحصائيات العملاء ===
+    // عدد العملاء الفريدين الذين قاموا بطلبات (من purchase_id)
+    const uniqueCustomersResult = await db.Order.findAll({
+      where: {
+        purchase_id: {
+          [db.Sequelize.Op.not]: null
+        }
+      },
+      attributes: [
+        [db.Sequelize.fn('DISTINCT', db.Sequelize.col('customer_session_id')), 'customer_session_id']
+      ],
+      raw: true
+    });
+
+    const totalCustomers = uniqueCustomersResult.length;
+
+    // عدد العملاء الجدد هذا الشهر
+    const newCustomersThisMonth = await db.Order.findAll({
+      where: {
+        purchase_id: {
+          [db.Sequelize.Op.not]: null
+        },
+        created_at: {
+          [db.Sequelize.Op.gte]: currentMonth
+        }
+      },
+      attributes: [
+        [db.Sequelize.fn('DISTINCT', db.Sequelize.col('customer_session_id')), 'customer_session_id']
+      ],
+      raw: true
+    });
+
+    const monthlyNewCustomers = newCustomersThisMonth.length;
+
+    // === إحصائيات التسوية المالية ===
+    const pendingSettlements = await db.Order.count({
+      where: {
+        settlement_status: 'settlement_requested'
+      }
+    });
+
+    const settledOrders = await db.Order.count({
+      where: {
+        settlement_status: 'settled'
+      }
+    });
+
+    // === إحصائيات التقييمات ===
+    const totalReviews = await db.Review.count();
+    const verifiedReviews = await db.Review.count({
+      where: { is_verified: true }
+    });
+    const pendingReviews = await db.Review.count({
+      where: { is_verified: false }
+    });
+
+    // === إحصائيات إضافية مفيدة ===
+    
+    // متوسط قيمة الطلب
+    const averageOrderValue = totalRevenue && completedOrders > 0 
+      ? parseFloat((totalRevenue / completedOrders).toFixed(2))
+      : 0;
+
+    // متوسط عدد الطلبات لكل عميل
+    const averageOrdersPerCustomer = totalCustomers > 0 
+      ? parseFloat((completedOrders / totalCustomers).toFixed(2))
+      : 0;
+
+    // === تجميع النتائج ===
     const stats = {
-      totalUsers,
-      totalMerchants,
-      totalAdmins,
-      totalStores,
-      newUsersThisMonth,
-      usersWithStores: await db.User.count({
-        include: [
-          {
-            model: db.Store,
-            as: 'Stores',
-            required: true
-          }
-        ]
-      })
+      // إحصائيات المستخدمين
+      users: {
+        total: totalUsers,
+        merchants: totalMerchants,
+        admins: totalAdmins,
+        newThisMonth: newUsersThisMonth,
+        withStores: usersWithStores
+      },
+      
+      // إحصائيات المتاجر
+      stores: {
+        total: totalStores
+      },
+      
+      // إحصائيات الطلبات
+      orders: {
+        total: totalOrders,
+        completed: completedOrders,
+        pending: pendingOrders,
+        cancelled: cancelledOrders
+      },
+      
+      // إحصائيات الإيرادات
+      revenue: {
+        total: parseFloat(totalRevenue).toFixed(2),
+        monthly: parseFloat(monthlyRevenue).toFixed(2),
+        averageOrderValue: averageOrderValue
+      },
+      
+      // إحصائيات المنتجات
+      products: {
+        total: totalProducts,
+        newThisMonth: newProductsThisMonth,
+        lowStock: lowStockProducts,
+        outOfStock: outOfStockProducts
+      },
+      
+      // إحصائيات العملاء
+      customers: {
+        total: totalCustomers,
+        newThisMonth: monthlyNewCustomers,
+        averageOrdersPerCustomer: averageOrdersPerCustomer
+      },
+      
+      // إحصائيات التسوية المالية
+      settlements: {
+        pending: pendingSettlements,
+        completed: settledOrders
+      },
+      
+      // إحصائيات التقييمات
+      reviews: {
+        total: totalReviews,
+        verified: verifiedReviews,
+        pending: pendingReviews
+      },
+      
+      // معلومات إضافية مفيدة للداشبورد
+      summary: {
+        totalSiteRevenue: parseFloat(totalRevenue).toFixed(2),
+        totalSiteOrders: totalOrders,
+        totalSiteProducts: totalProducts,
+        totalSiteCustomers: totalCustomers,
+        monthlyGrowth: {
+          newUsers: newUsersThisMonth,
+          newProducts: newProductsThisMonth,
+          newCustomers: monthlyNewCustomers,
+          revenue: parseFloat(monthlyRevenue).toFixed(2)
+        }
+      }
     };
 
-    res.status(200).json(stats);
+    res.status(200).json({
+      success: true,
+      message: 'تم جلب الإحصائيات بنجاح',
+      data: stats,
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+    console.error('Error in getUsersStats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'حدث خطأ في السيرفر',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
