@@ -652,15 +652,73 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// تغيير كلمة المرور
-exports.changePassword = async (req, res) => {
+exports.requestPasswordReset = async (req, res) => {
   try {
-    const { current_password, new_password, confirm_password } = req.body;
+    const { username } = req.body;
 
     // التحقق من البيانات المطلوبة
-    if (!current_password || !new_password || !confirm_password) {
+    if (!username) {
       return res.status(400).json({ 
-        error: 'كلمة المرور الحالية والجديدة وتأكيدها مطلوبة' 
+        error: 'اسم المستخدم مطلوب' 
+      });
+    }
+
+    // البحث عن المستخدم
+    const user = await db.User.findOne({ where: { username } });
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    // التحقق من وجود رقم واتساب
+    if (!user.whatsapp_number) {
+      return res.status(400).json({ error: 'لا يوجد رقم واتساب مرتبط بهذا الحساب' });
+    }
+
+    // التحقق من وجود رمز نشط لإعادة تعيين كلمة المرور
+    const existingCode = whatsappService.verificationCodes.get(`reset_${user.user_id}`);
+    if (existingCode) {
+      const timeLeft = Math.max(0, Math.floor((existingCode.expires - Date.now()) / 1000));
+      
+      // السماح بإعادة الإرسال إذا بقي أقل من دقيقتين
+      if (timeLeft > 120) {
+        return res.status(429).json({
+          error: `يوجد رمز نشط. يمكنك طلب رمز جديد بعد ${Math.floor(timeLeft / 60)} دقيقة و ${timeLeft % 60} ثانية`,
+          time_left: timeLeft,
+          can_resend_at: new Date(Date.now() + (timeLeft - 120) * 1000)
+        });
+      }
+    }
+
+    // إرسال رمز التحقق مع معرف خاص لإعادة تعيين كلمة المرور
+    const result = await whatsappService.sendVerificationCode(user.whatsapp_number, `reset_${user.user_id}`);
+
+    res.status(200).json({
+      message: 'تم إرسال رمز إعادة تعيين كلمة المرور بنجاح إلى الواتساب',
+      success: true,
+      phone_number: user.whatsapp_number,
+      user_id: user.user_id, // نحتاج هذا للمرحلة التالية
+      expires_in: 300, // 5 دقائق
+      can_resend_after: 120, // يمكن إعادة الإرسال بعد دقيقتين
+      next_step: 'verify_and_reset_password'
+    });
+
+  } catch (error) {
+    console.error('خطأ في طلب إعادة تعيين كلمة السر:', error);
+    res.status(500).json({
+      error: error.message || 'فشل في إرسال رمز التحقق'
+    });
+  }
+};
+
+// المرحلة الثانية: التحقق من الرمز وتعيين كلمة المرور الجديدة
+exports.verifyAndResetPassword = async (req, res) => {
+  try {
+    const { username, verification_code, new_password, confirm_password } = req.body;
+
+    // التحقق من البيانات المطلوبة
+    if (!username || !verification_code || !new_password || !confirm_password) {
+      return res.status(400).json({ 
+        error: 'اسم المستخدم ورمز التحقق وكلمة المرور الجديدة وتأكيدها مطلوبة' 
       });
     }
 
@@ -674,26 +732,151 @@ exports.changePassword = async (req, res) => {
       return res.status(400).json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' });
     }
 
-    const user = await db.User.findByPk(req.user.user_id);
+    // البحث عن المستخدم باستخدام اسم المستخدم
+    const user = await db.User.findOne({ where: { username } });
     if (!user) {
       return res.status(404).json({ error: 'المستخدم غير موجود' });
     }
 
-    // التحقق من كلمة المرور الحالية
-    const isCurrentPasswordValid = await bcrypt.compare(current_password, user.password_hash);
-    if (!isCurrentPasswordValid) {
-      return res.status(401).json({ error: 'كلمة المرور الحالية غير صحيحة' });
+    // التحقق من رمز التحقق باستخدام user_id المستخرج من قاعدة البيانات
+    const verificationResult = whatsappService.verifyCode(`reset_${user.user_id}`, verification_code);
+
+    if (!verificationResult.success) {
+      return res.status(400).json({
+        error: verificationResult.message,
+        can_request_new: true
+      });
     }
 
     // تشفير كلمة المرور الجديدة
     const saltRounds = 10;
     const new_password_hash = await bcrypt.hash(new_password, saltRounds);
 
+    // تحديث كلمة المرور
     await user.update({ password_hash: new_password_hash });
-    res.status(200).json({ message: 'تم تغيير كلمة المرور بنجاح' });
+
+    // إنشاء توكن جديد للمستخدم (تسجيل دخول تلقائي)
+    const tokenPayload = {
+      user_id: user.user_id,
+      username: user.username,
+      role: user.role,
+      is_verified: user.is_verified
+    };
+
+    const token = jwt.sign(tokenPayload, SECRET_KEY, { expiresIn: '24h' });
+
+    res.status(200).json({
+      message: 'تم إعادة تعيين كلمة المرور بنجاح',
+      success: true,
+      timestamp: new Date(),
+      token: token, // تسجيل دخول تلقائي
+      user: {
+        user_id: user.user_id,
+        username: user.username,
+        role: user.role,
+        is_verified: user.is_verified
+      }
+    });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+    console.error('خطأ في إعادة تعيين كلمة المرور:', error);
+    res.status(500).json({
+      error: 'حدث خطأ في السيرفر'
+    });
+  }
+};
+// تابع مساعد لإعادة إرسال رمز التحقق لإعادة تعيين كلمة السر
+exports.resendPasswordResetCode = async (req, res) => {
+  try {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ error: 'معرف المستخدم مطلوب' });
+    }
+
+    const user = await db.User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'المستخدم غير موجود' });
+    }
+
+    if (!user.whatsapp_number) {
+      return res.status(400).json({ error: 'لا يوجد رقم واتساب مرتبط بهذا الحساب' });
+    }
+
+    // التحقق من وجود رمز نشط
+    const existingCode = whatsappService.verificationCodes.get(`reset_${user.user_id}`);
+    if (existingCode) {
+      const timeLeft = Math.max(0, Math.floor((existingCode.expires - Date.now()) / 1000));
+      
+      if (timeLeft > 120) {
+        return res.status(429).json({
+          error: `يمكنك طلب رمز جديد بعد ${Math.floor(timeLeft / 60)} دقيقة و ${timeLeft % 60} ثانية`,
+          time_left: timeLeft
+        });
+      }
+    }
+
+    // إرسال رمز التحقق الجديد
+    const result = await whatsappService.sendVerificationCode(user.whatsapp_number, `reset_${user.user_id}`);
+
+    res.status(200).json({
+      message: 'تم إعادة إرسال رمز التحقق بنجاح',
+      success: true,
+      phone_number: user.whatsapp_number,
+      expires_in: 300
+    });
+
+  } catch (error) {
+    console.error('خطأ في إعادة إرسال رمز التحقق:', error);
+    res.status(500).json({
+      error: error.message || 'فشل في إعادة إرسال رمز التحقق'
+    });
+  }
+};
+
+// تابع للتحقق من صحة اسم المستخدم (اختياري - لمساعدة المستخدم)
+exports.checkUsername = async (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({ error: 'اسم المستخدم مطلوب' });
+    }
+
+    const user = await db.User.findOne({ 
+      where: { username },
+      attributes: ['user_id', 'username', 'whatsapp_number'] // لا نرجع معلومات حساسة
+    });
+
+    if (!user) {
+      return res.status(404).json({ 
+        error: 'اسم المستخدم غير موجود',
+        valid: false 
+      });
+    }
+
+    if (!user.whatsapp_number) {
+      return res.status(400).json({ 
+        error: 'لا يوجد رقم واتساب مرتبط بهذا الحساب',
+        valid: false 
+      });
+    }
+
+    // إخفاء جزء من رقم الهاتف لأسباب الخصوصية
+    const maskedPhone = user.whatsapp_number.replace(/(\d{2})\d+(\d{2})/, '$1****$2');
+
+    res.status(200).json({
+      message: 'اسم المستخدم صحيح',
+      valid: true,
+      user_id: user.user_id,
+      masked_phone: maskedPhone
+    });
+
+  } catch (error) {
+    console.error('خطأ في التحقق من اسم المستخدم:', error);
+    res.status(500).json({
+      error: 'حدث خطأ في السيرفر'
+    });
   }
 };
 

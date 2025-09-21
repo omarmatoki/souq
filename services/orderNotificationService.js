@@ -2,6 +2,7 @@ const whatsappService = require('../config/whatsapp');
 const db = require('../models');
 
 // تابع لإرسال إشعار الطلب الجديد لصاحب المتجر
+// تابع لإرسال إشعار الطلب الجديد لصاحب المتجر
 const sendOrderNotificationToMerchant = async (order, orderItems, shipping) => {
   try {
     // جلب بيانات المتجر وصاحبه
@@ -27,20 +28,46 @@ const sendOrderNotificationToMerchant = async (order, orderItems, shipping) => {
       
       productsDetails += `• ${product.name}\n`;
       productsDetails += `  الكمية: ${item.quantity}\n`;
-      productsDetails += `  السعر: ${item.price_at_time} ريال\n`;
-      productsDetails += `  المجموع: ${(item.price_at_time * item.quantity).toFixed(2)} ريال\n\n`;
+      productsDetails += `  السعر: ${item.price_at_time} $\n`;
+      productsDetails += `  المجموع: ${(item.price_at_time * item.quantity).toFixed(2)} $\n\n`;
     }
 
-    // تحضير الرسالة
+    // ✅ إعداد العنوان بشكل آمن مع التحقق من جميع الخصائص المحتملة
+    const getCustomerAddress = () => {
+      // التحقق من الخصائص المختلفة المحتملة للعنوان
+      const address = shipping.customer_address || 
+                    shipping.address || 
+                    shipping.shipping_address || 
+                    shipping.delivery_address;
+      
+      if (!address) {
+        return 'العنوان غير محدد';
+      }
+      
+      // إذا كان العنوان عبارة عن كائن JSON
+      if (typeof address === 'object') {
+        const addressParts = [];
+        if (address.street) addressParts.push(address.street);
+        if (address.city) addressParts.push(address.city);
+        if (address.district) addressParts.push(address.district);
+        if (address.building) addressParts.push(`مبنى ${address.building}`);
+        if (address.apartment) addressParts.push(`شقة ${address.apartment}`);
+        
+        return addressParts.length > 0 ? addressParts.join(', ') : 'العنوان غير محدد';
+      }
+      
+      return address;
+    };
+
+    // ✅ تحضير الرسالة بدون معرف الطلب ومعرف الشراء
     const message = `🛍️ *طلب جديد على متجرك!*
 
-📅 رقم الطلب: *${order.order_id}*
 🏪 المتجر: *${store.store_name}*
 
 👤 *بيانات العميل:*
-الاسم: ${shipping.customer_name}
-الهاتف: ${shipping.customer_phone}
-العنوان: ${shipping.customer_address}
+الاسم: ${shipping.customer_name || 'غير محدد'}
+الهاتف: ${shipping.customer_phone || 'غير محدد'}
+العنوان: ${getCustomerAddress()}
 ${shipping.customer_notes ? `ملاحظات: ${shipping.customer_notes}` : ''}
 
 📦 *تفاصيل الطلب:*
@@ -48,12 +75,18 @@ ${productsDetails}
 
 💰 *الملخص المالي:*
 إجمالي المنتجات: ${totalQuantity} قطعة
-المبلغ الإجمالي: *${order.total_price} ريال*
+المبلغ الإجمالي: *${order.total_price} $*
 
 📋 *حالة الطلب:* ${getStatusInArabic(order.status)}
-🆔 معرف الشراء: ${order.purchase_id}
 
-⏰ تاريخ الطلب: ${new Date(order.created_at).toLocaleString('ar-SA')}
+⏰ تاريخ الطلب: ${new Date(order.created_at).toLocaleString('en-US', { 
+  year: 'numeric', 
+  month: '2-digit', 
+  day: '2-digit', 
+  hour: '2-digit', 
+  minute: '2-digit',
+  hour12: true
+})}
 
 ---
 يرجى مراجعة لوحة التحكم لإدارة الطلب 📱`;
@@ -61,14 +94,14 @@ ${productsDetails}
     // إرسال الرسالة
     const result = await whatsappService.sendMessage(store.User.whatsapp_number, message);
     
-    console.log(`تم إرسال إشعار الطلب ${order.order_id} لصاحب المتجر ${store.store_name}`);
+    console.log(`تم إرسال إشعار طلب جديد لصاحب المتجر ${store.store_name}`);
     
     return {
       success: true,
       storeName: store.store_name,
       merchantName: store.User.username,
       phoneNumber: store.User.whatsapp_number,
-      orderId: order.order_id
+      purchaseId: order.purchase_id // ✅ تغيير من orderId إلى purchaseId
     };
 
   } catch (error) {
@@ -76,7 +109,7 @@ ${productsDetails}
     return {
       success: false,
       error: error.message,
-      orderId: order.order_id
+      purchaseId: order.purchase_id // ✅ تغيير من orderId إلى purchaseId
     };
   }
 };

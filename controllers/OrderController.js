@@ -1,10 +1,13 @@
 // في أعلى ملف controllers/OrderController.js
 const db = require('../models');
+const whatsappService = require('../config/whatsapp');
 const { sendOrderNotificationToMerchant } = require('../services/orderNotificationService');
+
+
 
 // استيراد النماذج المطلوبة
 const { Order, OrderItem, Product, Store, Cart, CartItem, Shipping } = db;
-
+const User = db.User; // ✅ إضافة User
 exports.createOrder = async (req, res) => {
   const transaction = await db.sequelize.transaction();
  
@@ -627,9 +630,6 @@ exports.getAllOrdersWithStats = async (req, res) => {
     });
   }
 };
-
-
-
 // تغيير حالة الطلب من غير مشحونة إلى مشحونة
 exports.updateOrderToShipped = async (req, res) => {
   try {
@@ -642,12 +642,12 @@ exports.updateOrderToShipped = async (req, res) => {
       return res.status(400).json({ error: 'معرف الطلب مطلوب' });
     }
 
-    // جلب الطلب
+    // جلب الطلب مع معلومات المتجر
     const order = await Order.findByPk(order_id, {
       include: [
         {
           model: Store,
-          attributes: ['store_name', 'logo_image', 'store_address']
+          attributes: ['store_id', 'store_name', 'logo_image', 'store_address']
         },
         {
           model: OrderItem,
@@ -660,9 +660,6 @@ exports.updateOrderToShipped = async (req, res) => {
       return res.status(404).json({ error: 'الطلب غير موجود' });
     }
 
-    // تحديث حالة الطلب إلى "shipped"
-    await order.update({ status: 'shipped' });
-
     // جلب معلومات الشحن يدوياً باستخدام purchase_id
     let shippingInfo = null;
     if (order.purchase_id) {
@@ -670,12 +667,142 @@ exports.updateOrderToShipped = async (req, res) => {
         shippingInfo = await Shipping.findOne({
           where: { purchase_id: order.purchase_id }
         });
+        console.log('معلومات الشحن:', shippingInfo ? 'موجودة' : 'غير موجودة');
       } catch (error) {
         console.error('خطأ في جلب معلومات الشحن:', error);
       }
     }
 
-    // تنسيق البيانات
+    // اختيار رقم العميل
+    let customerWhatsApp = null;
+    let customerName = null;
+    let phoneSource = null;
+
+    if (shippingInfo) {
+      customerName = shippingInfo.customer_name;
+      
+      // اختيار الرقم الصحيح
+      if (shippingInfo.customer_phone && 
+          shippingInfo.customer_phone.trim() !== '' && 
+          shippingInfo.customer_phone !== '01234567890') {
+        customerWhatsApp = shippingInfo.customer_phone;
+        phoneSource = 'customer_phone';
+        console.log('تم اختيار customer_phone:', customerWhatsApp);
+      } else if (shippingInfo.customer_whatsapp && 
+                 shippingInfo.customer_whatsapp.trim() !== '' && 
+                 shippingInfo.customer_whatsapp !== '01234567890') {
+        customerWhatsApp = shippingInfo.customer_whatsapp;
+        phoneSource = 'customer_whatsapp';
+        console.log('تم اختيار customer_whatsapp:', customerWhatsApp);
+      }
+    }
+
+    // تحديث حالة الطلب إلى "shipped"
+    await order.update({ status: 'shipped' });
+
+    // محاولة إرسال رسالة WhatsApp بالطريقة الذكية
+    let whatsappResult = null;
+    if (customerWhatsApp && order.Store && order.Store.store_name) {
+      
+      console.log('محاولة إرسال رسالة WhatsApp إلى:', customerWhatsApp);
+
+      // تحقق من حالة الخدمة
+      const isWhatsAppAvailable = whatsappService && 
+                                 whatsappService.client && 
+                                 whatsappService.isServiceAvailable();
+
+      if (!isWhatsAppAvailable) {
+        console.log('خدمة WhatsApp غير متوفرة أو غير جاهزة');
+        whatsappResult = { 
+          success: false, 
+          error: 'خدمة WhatsApp غير متصلة أو غير جاهزة'
+        };
+      } else {
+        try {
+          console.log('بدء عملية إرسال رسالة WhatsApp بالطريقة الذكية...');
+          
+          // ✅ تحضير تفاصيل المنتجات
+          let productsDetails = '';
+          let totalQuantity = 0;
+          
+          if (order.OrderItems && order.OrderItems.length > 0) {
+            for (const item of order.OrderItems) {
+              const product = item.Product;
+              totalQuantity += item.quantity;
+              
+              productsDetails += `• ${product.name}\n`;
+              productsDetails += `  الكمية: ${item.quantity}\n`;
+              productsDetails += `  السعر: ${item.price_at_time} $\n`;
+              productsDetails += `  المجموع: ${(item.price_at_time * item.quantity).toFixed(2)} $\n\n`;
+            }
+          }
+          
+          // ✅ الرسالة المحدثة مع تفاصيل المنتجات وبدون معرف الطلب
+          const message = `🚚 *تم شحن طلبك من المتجر*
+
+📦 تم شحن طلبك من متجر: *${order.Store.store_name}*
+
+📋 *تفاصيل المنتجات المشحونة:*
+${productsDetails}
+
+💰 *ملخص الطلب:*
+إجمالي المنتجات: ${totalQuantity} قطعة
+المبلغ الإجمالي: ${order.total_price} $
+
+📅 تاريخ الشحن: ${new Date().toLocaleString('en-US', { 
+  year: 'numeric', 
+  month: '2-digit', 
+  day: '2-digit', 
+  hour: '2-digit', 
+  minute: '2-digit',
+  hour12: true
+})}
+
+${shippingInfo && shippingInfo.tracking_number ? `🔢 رقم التتبع: ${shippingInfo.tracking_number}\n` : ''}
+سيتم توصيل طلبك في أقرب وقت ممكن 📍
+
+شكراً لاستخدام خدماتنا 🌟`;
+
+          // استخدام الإرسال الذكي مع اكتشاف رمز الدولة
+          const result = await whatsappService.sendMessageSmart(customerWhatsApp, message);
+          
+          console.log(`✅ نجح الإرسال الذكي!`);
+          console.log(`📱 الرقم الأصلي: ${result.originalPhoneNumber}`);
+          console.log(`📱 الرقم المستخدم: ${result.usedPhoneNumber}`);
+          console.log(`🔧 الصيغة: ${result.usedFormat}`);
+          console.log(`🔢 رقم المحاولة: ${result.attemptNumber}`);
+          console.log(`🌍 الدولة: ${result.detectedCountry}`);
+          
+          whatsappResult = {
+            success: true,
+            message: 'تم إرسال الرسالة بنجاح',
+            messageId: result.messageId,
+            originalPhoneNumber: result.originalPhoneNumber,
+            usedPhoneNumber: result.usedPhoneNumber,
+            usedFormat: result.usedFormat,
+            attemptNumber: result.attemptNumber,
+            detectedCountry: result.detectedCountry,
+            countryCode: result.countryCode
+          };
+          
+        } catch (smartError) {
+          console.error(`❌ فشل الإرسال الذكي:`, smartError.message);
+          
+          whatsappResult = {
+            success: false,
+            error: smartError.message
+          };
+        }
+      }
+    } else {
+      console.log('لم يتم إرسال رسالة WhatsApp - بيانات مفقودة');
+      whatsappResult = { 
+        success: false, 
+        error: 'بيانات العميل أو المتجر غير متوفرة'
+      };
+    }
+
+    // تنسيق البيانات للاستجابة
     const orderData = order.toJSON();
     
     // إضافة معلومات الشحن
@@ -720,7 +847,25 @@ exports.updateOrderToShipped = async (req, res) => {
 
     res.status(200).json({
       message: 'تم تحديث حالة الطلب إلى مشحون بنجاح',
-      order: orderData
+      order: orderData,
+      whatsapp_notification: {
+        sent: !!whatsappResult?.success,
+        customer_phone: customerWhatsApp,
+        phone_source: phoneSource,
+        customer_name: customerName,
+        store_name: order.Store?.store_name,
+        original_phone: whatsappResult?.originalPhoneNumber || customerWhatsApp,
+        used_phone: whatsappResult?.usedPhoneNumber || customerWhatsApp,
+        used_format: whatsappResult?.usedFormat || 'غير محدد',
+        attempt_number: whatsappResult?.attemptNumber || 0,
+        detected_country: whatsappResult?.detectedCountry || 'غير محدد',
+        country_code: whatsappResult?.countryCode || 'غير محدد',
+        message_details: whatsappResult?.success ? 'تم إرسال رسالة التنبيه بنجاح' : whatsappResult?.error || 'فشل في إرسال رسالة التنبيه',
+        error_details: whatsappResult?.success ? null : {
+          error: whatsappResult?.error,
+          timestamp: new Date().toISOString()
+        }
+      }
     });
 
   } catch (error) {
@@ -731,7 +876,6 @@ exports.updateOrderToShipped = async (req, res) => {
     });
   }
 };
-
 // تحديث طلبات المتجر المشحونة إلى مبرمجة
 exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
   try {
@@ -748,7 +892,7 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
       where: {
         store_id: storeId,
         status: 'shipped',
-        settlement_status: 'not_settled' // استخدام settlement_status بدلاً من is_programmatic
+        settlement_status: 'not_settled'
       },
       order: [
         ['order_id', 'DESC']
@@ -771,10 +915,18 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
           [Op.lte]: lastShippedOrder.order_id
         }
       },
+      include: [
+        {
+          model: Store,
+          attributes: ['store_name', 'logo_image', 'store_address']
+        }
+      ],
       order: [
         ['order_id', 'DESC']
       ]
     });
+
+    console.log(`📦 معالجة ${ordersToUpdate.length} طلب للمتجر ${storeId}`);
 
     // تحديث جميع هذه الطلبات إلى settlement_requested
     const updateResult = await Order.update(
@@ -790,6 +942,107 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
         }
       }
     );
+
+    // إرسال رسائل WhatsApp لجميع العملاء
+    let whatsappResults = [];
+    
+    for (const order of ordersToUpdate) {
+      try {
+        console.log(`📱 معالجة الطلب ${order.order_id} للإشعار...`);
+        
+        // جلب معلومات الشحن للطلب
+        let shippingInfo = null;
+        if (order.purchase_id) {
+          try {
+            shippingInfo = await Shipping.findOne({
+              where: { purchase_id: order.purchase_id }
+            });
+          } catch (error) {
+            console.error(`خطأ في جلب معلومات الشحن للطلب ${order.order_id}:`, error);
+          }
+        }
+
+        // تحديد رقم العميل للإرسال
+        let customerPhone = null;
+        let customerName = null;
+
+        if (shippingInfo) {
+          customerName = shippingInfo.customer_name;
+          
+          // اختيار الرقم المناسب
+          if (shippingInfo.customer_phone && 
+              shippingInfo.customer_phone.trim() !== '' && 
+              shippingInfo.customer_phone !== '01234567890') {
+            customerPhone = shippingInfo.customer_phone;
+            console.log(`📞 استخدام customer_phone للطلب ${order.order_id}: ${customerPhone}`);
+          } else if (shippingInfo.customer_whatsapp && 
+                     shippingInfo.customer_whatsapp.trim() !== '' && 
+                     shippingInfo.customer_whatsapp !== '01234567890') {
+            customerPhone = shippingInfo.customer_whatsapp;
+            console.log(`📞 استخدام customer_whatsapp للطلب ${order.order_id}: ${customerPhone}`);
+          }
+        }
+
+        // إرسال رسالة WhatsApp إذا كان الرقم متوفر
+        let whatsappResult = {
+          order_id: order.order_id,
+          sent: false,
+          customer_phone: customerPhone,
+          customer_name: customerName,
+          error: null
+        };
+
+        if (customerPhone && whatsappService.isReady && order.Store?.store_name) {
+          try {
+            const message = `🎉 *تهانينا! تم تصفير حسابك*
+
+📦 متجر: *${order.Store.store_name}*
+🆔 رقم الطلب: #${order.order_id}
+💰 المبلغ: ${order.total_price} $
+
+✅ تم تصفير هذا الطلب وإضافة المبلغ لحسابك
+
+شكراً لثقتكم بنا 🌟`;
+
+            console.log(`📤 إرسال رسالة مباشرة للطلب ${order.order_id} إلى: ${customerPhone}`);
+
+            // استخدام الإرسال المباشر بدون أي تحويل
+            const result = await whatsappService.sendMessageDirect(customerPhone, message);
+            
+            if (result.success) {
+              whatsappResult.sent = true;
+              whatsappResult.message_id = result.messageId;
+              console.log(`✅ تم إرسال إشعار التصفير للطلب ${order.order_id} بنجاح`);
+            } else {
+              whatsappResult.error = 'فشل في الإرسال';
+              console.log(`❌ فشل إرسال إشعار التصفير للطلب ${order.order_id}`);
+            }
+
+          } catch (whatsappError) {
+            whatsappResult.error = whatsappError.message;
+            console.error(`❌ خطأ في إرسال إشعار التصفير للطلب ${order.order_id}:`, whatsappError.message);
+          }
+        } else {
+          let missingInfo = [];
+          if (!customerPhone) missingInfo.push('رقم الهاتف');
+          if (!whatsappService.isReady) missingInfo.push('خدمة WhatsApp غير جاهزة');
+          if (!order.Store?.store_name) missingInfo.push('اسم المتجر');
+          
+          whatsappResult.error = `بيانات ناقصة: ${missingInfo.join(', ')}`;
+          console.log(`⚠️ لم يتم إرسال إشعار للطلب ${order.order_id}: ${whatsappResult.error}`);
+        }
+
+        whatsappResults.push(whatsappResult);
+
+      } catch (error) {
+        console.error(`خطأ في معالجة الطلب ${order.order_id}:`, error);
+        whatsappResults.push({
+          order_id: order.order_id,
+          sent: false,
+          error: error.message
+        });
+      }
+    }
 
     // جلب الطلبات المحدثة مع بياناتها الكاملة
     const updatedOrders = await Order.findAll({
@@ -816,23 +1069,38 @@ exports.updateStoreShippedOrdersToProgrammatic = async (req, res) => {
       ]
     });
 
+    // إحصائيات إرسال الرسائل
+    const successfulNotifications = whatsappResults.filter(r => r.sent).length;
+    const failedNotifications = whatsappResults.filter(r => !r.sent).length;
+
+    console.log(`📊 ملخص الإشعارات: ${successfulNotifications} نجح، ${failedNotifications} فشل`);
+
     res.status(200).json({
       message: `تم طلب تصفير ${updateResult[0]} طلب مشحون للمتجر`,
       store_id: storeId,
       updated_count: updateResult[0],
       last_order_id: lastShippedOrder.order_id,
       updated_orders: updatedOrders,
+      whatsapp_notifications: {
+        total_orders: whatsappResults.length,
+        successful_notifications: successfulNotifications,
+        failed_notifications: failedNotifications,
+        results: whatsappResults
+      },
       summary: {
         total_updated: updateResult[0],
         from_order_id: ordersToUpdate.length > 0 ? Math.min(...ordersToUpdate.map(o => o.order_id)) : null,
-        to_order_id: lastShippedOrder.order_id
+        to_order_id: lastShippedOrder.order_id,
+        notifications_sent: successfulNotifications,
+        notifications_failed: failedNotifications
       }
     });
 
   } catch (error) {
     console.error('خطأ في تحديث طلبات المتجر:', error);
     res.status(500).json({ 
-      error: 'حدث خطأ في السيرفر أثناء تحديث الطلبات' 
+      error: 'حدث خطأ في السيرفر أثناء تحديث الطلبات',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -1583,7 +1851,7 @@ exports.getPendingSettlementOrders = async (req, res) => {
         summary: totalSummary,
         metadata: {
           generated_at: new Date().toISOString(),
-          currency: 'ر.س',
+          currency: '$',
           settlement_status: 'settlement_requested'
         }
       }
@@ -1901,17 +2169,51 @@ exports.requestOrdersSettlement = async (req, res) => {
     
     console.log('requestOrdersSettlement called for store_id:', store_id);
     
+    // ✅ التحقق من وجود طلبات مشحونة قابلة للتصفير قبل المتابعة
+    const shippedOrders = await Order.findAll({
+      where: {
+        store_id: store_id,
+        status: 'shipped', // ✅ فقط الطلبات المشحونة
+        settlement_status: 'not_settled' // والتي لم يتم تصفيرها بعد
+      }
+    });
+
+    // ✅ إذا لم توجد طلبات مشحونة، أرجع رسالة واضحة
+    if (!shippedOrders || shippedOrders.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'لا توجد طلبات مشحونة قابلة للتصفير',
+        details: {
+          reason: 'no_shipped_orders',
+          message: 'يجب أن تكون الطلبات في حالة "مشحون" لطلب التصفير',
+          shipped_orders_count: 0,
+          store_id: store_id
+        }
+      });
+    }
+
+    console.log(`تم العثور على ${shippedOrders.length} طلب مشحون قابل للتصفير`);
+    
+    // ✅ تمرير معرف المتجر مع التأكد من وجود طلبات مشحونة
     const result = await requestOrdersSettlement(store_id);
 
     if (result.success) {
       res.status(200).json({
         success: true,
-        data: result
+        data: {
+          ...result,
+          shipped_orders_processed: shippedOrders.length,
+          processed_order_ids: shippedOrders.map(order => order.order_id)
+        }
       });
     } else {
       res.status(400).json({
         success: false,
-        error: result.message
+        error: result.message,
+        details: {
+          shipped_orders_available: shippedOrders.length,
+          store_id: store_id
+        }
       });
     }
 
@@ -2009,7 +2311,7 @@ exports.approveOrdersSettlement = async (req, res) => {
     }
 
     // التحقق من أن المستخدم هو أدمن
-    const user = await User.findByPk(admin_id);
+    const user = await db.User.findByPk(admin_id); // استخدام admin_id بدلاً من user_id
     
     if (!user) {
       return res.status(404).json({
@@ -2028,7 +2330,7 @@ exports.approveOrdersSettlement = async (req, res) => {
     console.log('Admin verification passed for user:', user.username);
 
     // تحديث جميع الطلبات التي طلبت التصفير إلى تم الرصد
-    const [updatedCount] = await Order.update(
+    const [updatedCount] = await db.Order.update( // إضافة db. قبل Order
       {
         settlement_status: 'settled',          // حالة التصفير أصبحت تم الرصد
         status: 'monitored',                    // تحديث الحالة إلى تم الرصد

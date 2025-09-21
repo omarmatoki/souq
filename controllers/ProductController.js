@@ -162,7 +162,6 @@ exports.createMultipleProducts = async (req, res) => {
 
 
 
-// الحصول على جميع المنتجات
 // إنشاء منتج جديد
 exports.createProduct = async (req, res) => {
   upload(req, res, async (err) => {
@@ -229,7 +228,10 @@ exports.getAllProducts = async (req, res) => {
         {
           model: db.Store,
           as: 'Store',
-          attributes: ['store_name', 'logo_image']
+          attributes: ['store_name', 'logo_image', 'is_blocked'],
+          where: {
+            is_blocked: false // فقط المتاجر غير المحظورة
+          }
         }
       ]
     });
@@ -251,9 +253,14 @@ exports.getAllProducts = async (req, res) => {
         hasDiscount = true;
       }
       
+      // إزالة is_blocked من بيانات المتجر المرجعة (اختياري)
+      const storeData = { ...productData.Store };
+      delete storeData.is_blocked;
+      
       return {
         ...productData,
         images,
+        Store: storeData, // بيانات المتجر بدون is_blocked
         original_price: originalPrice,
         discounted_price: parseFloat(discountedPrice.toFixed(2)),
         discount_amount: parseFloat(discountAmount.toFixed(2)),

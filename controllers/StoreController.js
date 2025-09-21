@@ -1,6 +1,8 @@
 const db = require('../models');
 const multer = require('multer');
 const path = require('path');
+// تأكد من استيراد db بشكل صحيح
+const { Op, QueryTypes } = require('sequelize');
 
 // إعداد تخزين الملفات باستخدام Multer
 const storage = multer.diskStorage({
@@ -70,11 +72,7 @@ exports.createStore = async (req, res) => {
     }
   });
 };
-
 // الحصول على جميع المتاجر
- // تأكد من استيراد db بشكل صحيح
-const { Op, QueryTypes } = require('sequelize');
-
 exports.getAllStores = async (req, res) => {
   try {
     const { search } = req.query;
@@ -83,16 +81,16 @@ exports.getAllStores = async (req, res) => {
     const currentDate = new Date();
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
 
-    // بناء شرط البحث
-    let searchCondition = '';
+    // بناء شرط البحث مع استبعاد المتاجر المحظورة
+    let searchCondition = 'WHERE s.is_blocked = false'; // استبعاد المتاجر المحظورة
     let searchParams = [];
     
     if (search) {
-      searchCondition = 'WHERE s.store_name LIKE ?';
+      searchCondition += ' AND s.store_name LIKE ?';
       searchParams.push(`%${search}%`);
     }
 
-    // استعلام شامل للحصول على جميع البيانات مرة واحدة
+    // استعلام شامل للحصول على جميع البيانات مرة واحدة (فقط المتاجر غير المحظورة)
     const storesQuery = `
       SELECT 
         s.*,
@@ -124,7 +122,7 @@ exports.getAllStores = async (req, res) => {
       type: QueryTypes.SELECT
     });
 
-    // الحصول على الإحصائيات العامة في استعلام واحد
+    // الحصول على الإحصائيات العامة (تشمل جميع المتاجر للإحصائيات)
     const statisticsQuery = `
       SELECT 
         COUNT(*) as totalStores,
@@ -137,10 +135,12 @@ exports.getAllStores = async (req, res) => {
       type: QueryTypes.SELECT
     });
 
-    // الحصول على إجمالي مبيعات الموقع
+    // الحصول على إجمالي مبيعات الموقع (فقط من المتاجر غير المحظورة)
     const totalSiteRevenueQuery = `
-      SELECT COALESCE(SUM(total_price), 0) as totalSiteRevenue
-      FROM Orders
+      SELECT COALESCE(SUM(o.total_price), 0) as totalSiteRevenue
+      FROM Orders o
+      INNER JOIN Stores s ON o.store_id = s.store_id
+      WHERE s.is_blocked = false
     `;
 
     const [siteRevenue] = await db.sequelize.query(totalSiteRevenueQuery, {
@@ -159,7 +159,7 @@ exports.getAllStores = async (req, res) => {
         description: store.description,
         images,
         logo_image: store.logo_image,
-        is_blocked: store.is_blocked,
+        is_blocked: store.is_blocked, // ستكون دائماً false في البيانات المرجعة
         created_at: store.created_at,
         User: {
           username: store.username,
@@ -192,7 +192,6 @@ exports.getAllStores = async (req, res) => {
     });
   }
 };
-
 // الحصول على متجر بواسطة المعرف
 // دالة getStoreById المصححة مع دعم الخصومات
 exports.getStoreById = async (req, res) => {
