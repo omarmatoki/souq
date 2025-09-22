@@ -1713,10 +1713,11 @@ exports.getSettlementStatistics = async (req, res) => {
 // تابع مُصحح للحصول على جميع المتاجر التي طلبت التصفير
 exports.getPendingSettlementOrders = async (req, res) => {
   try {
-    // الحصول على جميع الطلبات التي في حالة "تم الطلب" (settlement_requested)
+    // الحصول على جميع الطلبات التي في حالة "تم الطلب" (settlement_requested) والمشحونة فقط
     const pendingOrders = await Order.findAll({
       where: {
-        settlement_status: 'settlement_requested'
+        settlement_status: 'settlement_requested',
+        status: 'shipped' // ✅ إضافة شرط أن تكون الطلبات مشحونة فقط
       },
       attributes: [
         'order_id',
@@ -1735,7 +1736,6 @@ exports.getPendingSettlementOrders = async (req, res) => {
           include: [
             {
               model: User,
-              // ✅ إزالة email من attributes لأنه غير موجود في الجدول
               attributes: ['user_id', 'username', 'whatsapp_number']
             }
           ]
@@ -1747,7 +1747,7 @@ exports.getPendingSettlementOrders = async (req, res) => {
     if (pendingOrders.length === 0) {
       return res.status(200).json({
         success: true,
-        message: 'لا توجد طلبات معلقة للتصفير حالياً',
+        message: 'لا توجد طلبات مشحونة معلقة للتصفير حالياً',
         data: {
           stores: [],
           summary: {
@@ -1775,7 +1775,6 @@ exports.getPendingSettlementOrders = async (req, res) => {
             owner: {
               user_id: store.User.user_id,
               username: store.User.username,
-              // ✅ إزالة email من البيانات المُعادة
               whatsapp_number: store.User.whatsapp_number
             }
           },
@@ -1794,7 +1793,7 @@ exports.getPendingSettlementOrders = async (req, res) => {
         order_id: order.order_id,
         purchase_id: order.purchase_id,
         total_price: parseFloat(order.total_price),
-        status: order.status,
+        status: order.status, // سيكون دائماً 'shipped'
         settlement_requested_at: order.settlement_requested_at,
         created_at: order.created_at,
         days_since_request: Math.floor((new Date() - new Date(order.settlement_requested_at)) / (1000 * 60 * 60 * 24))
@@ -1845,14 +1844,15 @@ exports.getPendingSettlementOrders = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `تم العثور على ${storesArray.length} متجر لديه طلبات معلقة للتصفير`,
+      message: `تم العثور على ${storesArray.length} متجر لديه طلبات مشحونة معلقة للتصفير`,
       data: {
         stores: storesWithRanking,
         summary: totalSummary,
         metadata: {
           generated_at: new Date().toISOString(),
           currency: '$',
-          settlement_status: 'settlement_requested'
+          settlement_status: 'settlement_requested',
+          order_status_filter: 'shipped' // ✅ إضافة معلومة التصفية
         }
       }
     });
@@ -1861,7 +1861,7 @@ exports.getPendingSettlementOrders = async (req, res) => {
     console.error('Error in getPendingSettlementOrders:', error);
     res.status(500).json({ 
       success: false,
-      error: 'حدث خطأ في السيرفر أثناء جلب الطلبات المعلقة للتصفير',
+      error: 'حدث خطأ في السيرفر أثناء جلب الطلبات المشحونة المعلقة للتصفير',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
