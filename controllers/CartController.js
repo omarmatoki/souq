@@ -54,7 +54,6 @@ exports.getOrCreateCart = async (req, res) => {
   }
 };
 
-// إضافة منتج للسلة
 // إضافة منتج للسلة مع إنشاء السلة تلقائياً
 exports.addToCart = async (req, res) => {
   try {
@@ -74,6 +73,9 @@ exports.addToCart = async (req, res) => {
     if (product.stock_quantity < quantity) {
       return res.status(400).json({ error: 'المخزون غير كافي' });
     }
+
+    // حساب السعر النهائي (مع الخصم إن وُجد)
+    const finalPrice = product.getDiscountedPrice();
 
     // الحصول على السلة أو إنشاؤها تلقائياً
     let cart = await db.Cart.findOne({ 
@@ -118,13 +120,17 @@ exports.addToCart = async (req, res) => {
       if (product.stock_quantity < newQuantity) {
         return res.status(400).json({ error: 'المخزون غير كافي للكمية المطلوبة' });
       }
-      await cartItem.update({ quantity: newQuantity });
+      await cartItem.update({ 
+        quantity: newQuantity,
+        unit_price: finalPrice // تحديث السعر في حالة تغير الخصم
+      });
     } else {
       // إضافة منتج جديد للسلة
       cartItem = await db.CartItem.create({
         cart_id: cart.cart_id,
         product_id,
-        quantity
+        quantity,
+        unit_price: finalPrice // حفظ السعر بعد الخصم
       });
     }
 
@@ -158,13 +164,28 @@ exports.addToCart = async (req, res) => {
         if (item.Product && item.Product.images) {
           item.Product.images = JSON.parse(item.Product.images || '[]');
         }
+        // إضافة معلومات الخصم للاستجابة
+        if (item.Product) {
+          item.Product.dataValues.original_price = item.Product.price;
+          item.Product.dataValues.discounted_price = item.Product.getDiscountedPrice();
+          item.Product.dataValues.discount_amount = item.Product.getDiscountAmount();
+          item.Product.dataValues.has_discount = item.Product.hasDiscount();
+          item.Product.dataValues.discount_percentage = item.Product.discount_percentage;
+        }
         return item;
       });
     }
 
     res.status(201).json({
       message: 'تم إضافة المنتج للسلة بنجاح',
-      cart: updatedCart
+      cart: updatedCart,
+      product_info: {
+        original_price: product.price,
+        final_price: finalPrice,
+        discount_percentage: product.discount_percentage,
+        discount_amount: product.getDiscountAmount(),
+        has_discount: product.hasDiscount()
+      }
     });
   } catch (error) {
     console.error(error);

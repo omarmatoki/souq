@@ -498,8 +498,11 @@ exports.deleteStore = async (req, res) => {
       return res.status(404).json({ error: 'المتجر غير موجود' });
     }
 
-    // التحقق من ملكية المتجر
-    if (store.user_id !== req.user.user_id) {
+    // التحقق من الصلاحيات - يمكن للأدمن أو صاحب المتجر حذف المتجر
+   
+    const isAdmin = req.user.role === 'admin';
+    
+    if (!isAdmin) {
       return res.status(403).json({ error: 'غير مصرح لك بحذف هذا المتجر' });
     }
 
