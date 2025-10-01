@@ -1,3 +1,5 @@
+
+// الملف الكامل سيكون كالتالي:
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/UserController');
@@ -17,6 +19,8 @@ router.post('/reset-password', userController.verifyAndResetPassword);
 
 // إعادة إرسال رمز التحقق لإعادة تعيين كلمة السر
 router.post('/resend-reset-code', userController.resendPasswordResetCode);
+
+router.post('/change-password', authMiddleware, userController.changePassword);
 
 // التحقق من صحة اسم المستخدم (اختياري)
 router.post('/check-username', userController.checkUsername);

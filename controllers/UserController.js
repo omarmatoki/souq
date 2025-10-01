@@ -6,6 +6,11 @@ const path = require('path');
 const whatsappService = require('../config/whatsapp');
 
 const SECRET_KEY = process.env.SECRET_KEY;
+const SECURITY_CONFIG = {
+  MAX_FAILED_ATTEMPTS: 5,
+  LOCKOUT_DURATION: 15 * 60 * 1000, // 15 دقيقة
+  PROGRESSIVE_DELAYS: [0, 1000, 2000, 5000, 10000] // تأخير تدريجي
+};
 
 // إعداد تخزين الملفات باستخدام Multer
 const storage = multer.diskStorage({
@@ -100,17 +105,156 @@ exports.register = async (req, res) => {
   });
 };
 
-
-// الحل الأول: إضافة اختيار الدور في تسجيل الدخول
-exports.login = async (req, res) => {
+// تغيير كلمة السر للمستخدمين المسجلين دخولهم
+exports.changePassword = async (req, res) => {
   try {
-    const { username, password, role } = req.body; // إضافة role
+    const { current_password, new_password, confirm_password } = req.body;
+    const userId = req.user.user_id;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
+    // التحقق من وجود البيانات المطلوبة
+    if (!current_password || !new_password || !confirm_password) {
+      return res.status(400).json({
+        success: false,
+        message: 'جميع الحقول مطلوبة'
+      });
     }
 
-    // البحث عن المستخدم مع تحديد الدور (إذا تم إرساله)
+    // التحقق من تطابق كلمة المرور الجديدة
+    if (new_password !== confirm_password) {
+      return res.status(400).json({
+        success: false,
+        message: 'كلمة المرور الجديدة وتأكيد كلمة المرور غير متطابقتان'
+      });
+    }
+
+    // التحقق من طول كلمة المرور
+    if (new_password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'
+      });
+    }
+
+    // البحث عن المستخدم - تصحيح استخدام db.User بدلاً من User
+    const user = await db.User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'المستخدم غير موجود'
+      });
+    }
+
+    // التحقق من كلمة المرور الحالية
+    const isCurrentPasswordValid = await bcrypt.compare(current_password, user.password_hash);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'كلمة المرور الحالية غير صحيحة'
+      });
+    }
+
+    // تشفير كلمة المرور الجديدة
+    const saltRounds = 12;
+    const newPasswordHash = await bcrypt.hash(new_password, saltRounds);
+
+    // تحديث كلمة المرور
+    await user.update({
+      password_hash: newPasswordHash
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'تم تغيير كلمة المرور بنجاح'
+    });
+
+  } catch (error) {
+    console.error('خطأ في تغيير كلمة المرور:', error);
+    res.status(500).json({
+      success: false,
+      message: 'حدث خطأ في الخادم'
+    });
+  }
+};
+
+// الحل الأول: إضافة اختيار الدور في تسجيل الدخول
+
+// دوال مساعدة
+const getAttemptIdentifier = (req, username) => {
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  return `${username}_${ip}`;
+};
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+exports.login = async (req, res) => {
+  try {
+    const { username, password, role } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ 
+        error: 'اسم المستخدم وكلمة المرور مطلوبان',
+        security_info: { type: 'validation_error' }
+      });
+    }
+
+    const identifier = getAttemptIdentifier(req, username);
+    const ip_address = req.ip || req.connection.remoteAddress || 'unknown';
+    const user_agent = req.get('User-Agent') || '';
+
+    // ===== الخطوة 1: التحقق من حالة الحظر =====
+    let attemptRecord = null;
+    
+    if (db.LoginAttempts) {
+      try {
+        // تنظيف السجلات المنتهية الصلاحية
+        await db.LoginAttempts.update(
+          { is_active: false },
+          {
+            where: {
+              locked_until: { [db.Sequelize.Op.lt]: new Date() },
+              is_active: true
+            }
+          }
+        );
+
+        // البحث عن سجل المحاولات
+        attemptRecord = await db.LoginAttempts.findOne({
+          where: { identifier, is_active: true },
+          order: [['updatedAt', 'DESC']]
+        });
+
+        // التحقق من الحظر
+        if (attemptRecord && attemptRecord.locked_until && attemptRecord.locked_until > new Date()) {
+          const remainingTime = Math.ceil((attemptRecord.locked_until - new Date()) / 1000 / 60);
+          return res.status(429).json({
+            error: 'تم حظر هذا الحساب مؤقتاً بسبب محاولات تسجيل دخول متكررة',
+            security_info: {
+              type: 'account_locked',
+              remaining_minutes: remainingTime,
+              unlock_at: attemptRecord.locked_until,
+              total_failed_attempts: attemptRecord.failed_attempts,
+              reason: 'تجاوز الحد المسموح من المحاولات الخاطئة'
+            },
+            retry_after: remainingTime * 60
+          });
+        }
+
+        // تطبيق التأخير التدريجي
+        if (attemptRecord && attemptRecord.failed_attempts > 0) {
+          const delayIndex = Math.min(attemptRecord.failed_attempts, SECURITY_CONFIG.PROGRESSIVE_DELAYS.length - 1);
+          const delay = SECURITY_CONFIG.PROGRESSIVE_DELAYS[delayIndex];
+          if (delay > 0) {
+            console.log(`تطبيق تأخير ${delay}ms للمحاولة رقم ${attemptRecord.failed_attempts + 1}`);
+            await sleep(delay);
+          }
+        }
+      } catch (securityError) {
+        console.error('خطأ في نظام الأمان:', securityError);
+        // المتابعة بدون نظام الأمان
+      }
+    }
+
+    // ===== الخطوة 2: البحث عن المستخدم =====
     let whereClause = { username };
     if (role) {
       whereClause.role = role;
@@ -125,36 +269,111 @@ exports.login = async (req, res) => {
       }]
     });
 
-    if (users.length === 0) {
-      return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-    }
+    // ===== الخطوة 3: التحقق من صحة المستخدم وكلمة المرور =====
+    let isValidCredentials = false;
+    let user = null;
 
-    // إذا كان هناك أكثر من مستخدم بنفس الاسم ولم يتم تحديد الدور
-    if (users.length > 1 && !role) {
-      const availableRoles = users.map(user => ({
-        role: user.role,
-        role_name: user.role === 'admin' ? 'مدير' : 'تاجر'
+    if (users.length === 0) {
+      // مستخدم غير موجود
+      isValidCredentials = false;
+    } else if (users.length > 1 && !role) {
+      // تعدد الحسابات - لا نعتبرها محاولة فاشلة
+      const availableRoles = users.map(u => ({
+        role: u.role,
+        role_name: u.role === 'admin' ? 'مدير' : 'تاجر'
       }));
 
       return res.status(409).json({ 
         error: 'يوجد أكثر من حساب بهذا الاسم',
         message: 'يرجى تحديد نوع الحساب',
         available_roles: availableRoles,
-        requires_role_selection: true
+        requires_role_selection: true,
+        security_info: {
+          type: 'multiple_accounts',
+          current_attempts: attemptRecord?.failed_attempts || 0
+        }
       });
+    } else {
+      user = users[0];
+      isValidCredentials = await bcrypt.compare(password, user.password_hash);
     }
 
-    const user = users[0];
+    // ===== الخطوة 4: معالجة المحاولة الفاشلة =====
+    if (!isValidCredentials) {
+      if (db.LoginAttempts) {
+        try {
+          const now = new Date();
+          const newFailedAttempts = (attemptRecord?.failed_attempts || 0) + 1;
+          const shouldLock = newFailedAttempts >= SECURITY_CONFIG.MAX_FAILED_ATTEMPTS;
+          const lockedUntil = shouldLock ? new Date(now.getTime() + SECURITY_CONFIG.LOCKOUT_DURATION) : null;
 
-    // التحقق من كلمة المرور
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-    if (!isPasswordValid) {
+          if (attemptRecord) {
+            // تحديث السجل الموجود
+            await attemptRecord.update({
+              failed_attempts: newFailedAttempts,
+              last_attempt: now,
+              locked_until: lockedUntil,
+              lock_reason: shouldLock ? 'max_attempts' : null,
+              user_agent,
+              ip_address
+            });
+          } else {
+            // إنشاء سجل جديد
+            await db.LoginAttempts.create({
+              identifier,
+              username,
+              ip_address,
+              user_agent,
+              failed_attempts: newFailedAttempts,
+              last_attempt: now,
+              locked_until: lockedUntil,
+              lock_reason: shouldLock ? 'max_attempts' : null,
+              is_active: true
+            });
+          }
+
+          const remainingAttempts = Math.max(0, SECURITY_CONFIG.MAX_FAILED_ATTEMPTS - newFailedAttempts);
+          
+          return res.status(401).json({ 
+            error: 'اسم المستخدم أو كلمة المرور غير صحيحة',
+            security_info: {
+              type: 'invalid_credentials',
+              failed_attempts: newFailedAttempts,
+              remaining_attempts: remainingAttempts,
+              max_attempts: SECURITY_CONFIG.MAX_FAILED_ATTEMPTS,
+              warning: remainingAttempts <= 2 && remainingAttempts > 0 ? 
+                `تبقى ${remainingAttempts} محاولة قبل حظر الحساب` : null,
+              will_be_locked: shouldLock,
+              locked_until: lockedUntil
+            }
+          });
+        } catch (updateError) {
+          console.error('خطأ في تحديث سجل المحاولات:', updateError);
+        }
+      }
+      
+      // في حالة عدم وجود نظام الأمان
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
 
-    // التحقق من تفعيل الحساب (للتجار فقط)
+    // ===== الخطوة 5: نجح تسجيل الدخول - تنظيف السجلات =====
+    if (db.LoginAttempts && attemptRecord) {
+      try {
+        await attemptRecord.update({
+          failed_attempts: 0,
+          locked_until: null,
+          lock_reason: null,
+          success_login_at: new Date(),
+          unlock_method: 'successful_login'
+        });
+      } catch (cleanupError) {
+        console.error('خطأ في تنظيف سجل المحاولات:', cleanupError);
+      }
+    }
+
+    // ===== الخطوة 6: التحقق من تفعيل الحساب =====
     if (user.role === 'merchant' && user.whatsapp_number && !user.is_verified) {
-      const hasActiveCode = whatsappService.verificationCodes.has(user.user_id);
+      const hasActiveCode = whatsappService.verificationCodes && whatsappService.verificationCodes.has(user.user_id);
       
       return res.status(403).json({ 
         error: 'يجب تفعيل رقم الواتساب أولاً',
@@ -168,7 +387,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // إنشاء التوكن
+    // ===== الخطوة 7: إنشاء التوكن والاستجابة =====
     const tokenPayload = {
       user_id: user.user_id,
       username: user.username,
@@ -176,7 +395,6 @@ exports.login = async (req, res) => {
       is_verified: user.is_verified
     };
 
-    // إضافة معلومات المتجر للتجار فقط
     if (user.role === 'merchant' && user.Stores && user.Stores.length > 0) {
       tokenPayload.store_id = user.Stores[0].store_id;
     } else {
@@ -184,17 +402,19 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign(tokenPayload, SECRET_KEY, { expiresIn: '24h' });
-
     const { password_hash: _, ...userWithoutPassword } = user.toJSON();
 
-    // تخصيص الاستجابة حسب الدور
     const responseData = {
       message: `تم تسجيل الدخول بنجاح كـ${user.role === 'admin' ? 'مدير' : 'تاجر'}`,
       user: userWithoutPassword,
-      token
+      token,
+      security_info: {
+        type: 'login_success',
+        login_time: new Date().toISOString(),
+        previous_failed_attempts: attemptRecord?.failed_attempts || 0
+      }
     };
 
-    // إضافة معلومات المتجر للتجار
     if (user.role === 'merchant' && user.Stores && user.Stores.length > 0) {
       responseData.user.store = {
         store_id: user.Stores[0].store_id,
@@ -206,7 +426,10 @@ exports.login = async (req, res) => {
 
   } catch (error) {
     console.error('Error in login:', error);
-    res.status(500).json({ error: 'حدث خطأ في السيرفر' });
+    res.status(500).json({ 
+      error: 'حدث خطأ في السيرفر',
+      security_info: { type: 'server_error' }
+    });
   }
 };
 

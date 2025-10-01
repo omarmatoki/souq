@@ -1,13 +1,21 @@
-// في أعلى ملف controllers/OrderController.js
+// استيراد قاعدة البيانات والموديلات
 const db = require('../models');
+const { Op } = require('sequelize');
+
+// استيراد الخدمات الخارجية
 const whatsappService = require('../config/whatsapp');
 const { sendOrderNotificationToMerchant } = require('../services/orderNotificationService');
 
-
-
-// استيراد النماذج المطلوبة
-const { Order, OrderItem, Product, Store, Cart, CartItem, Shipping } = db;
-const User = db.User; // ✅ إضافة User
+// استخراج جميع الموديلات المطلوبة من db
+const Order = db.Order;
+const OrderItem = db.OrderItem;
+const Product = db.Product;
+const Store = db.Store;
+const Cart = db.Cart;
+const CartItem = db.CartItem;
+const Shipping = db.Shipping;
+const User = db.User;
+const Review = db.Review;
 exports.createOrder = async (req, res) => {
   const transaction = await db.sequelize.transaction();
  
